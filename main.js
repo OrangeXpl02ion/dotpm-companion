@@ -594,17 +594,20 @@ function renderQueue(body, st, on) {
     return;
   }
   const tb = h(doc, "tbody");
+  const pulled = st.settings.pulled || {};
   R.queue.forEach((t, i) => {
     const hrs = st.mode === "raw" ? M.remaining(t) : M.adjusted(t, mults);
     tb.append(h(doc, "tr", {},
       h(doc, "td", { class: "dpc-num dpc-muted" }, String(i + 1)),
       h(doc, "td", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority) || "—")),
-      h(doc, "td", { class: "dpc-title-cell" }, taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType].filter(Boolean).join(" · ")),
+      h(doc, "td", { class: "dpc-title-cell" }, taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType, pulled[t.path] ? "added today" : null].filter(Boolean).join(" · ")),
         t.checklist ? h(doc, "div", { class: "dpc-muted dpc-sub" }, `${t.checklist.done}/${t.checklist.total} done-when`) : null),
       h(doc, "td", { class: "dpc-nowrap" + (R.risk[t.path] && R.risk[t.path].overdue ? " dpc-warn" : ""), title: t.due ? null : "No due date" }, relDue(t.due, R.today)),
       h(doc, "td", { class: "dpc-num" }, t.type === "milestone" ? "◆" : fmtH(hrs)),
       h(doc, "td", {}, riskBadge(doc, R.risk[t.path])),
-      h(doc, "td", {}, h(doc, "button", { class: "dpc-done", title: "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓"))));
+      h(doc, "td", { class: "dpc-nowrap" }, pulled[t.path] ? h(doc, "button", { class: "dpc-small dpc-undo-pull", title: `Added today; undo puts it back to ${pulled[t.path].start ? "start " + fmtD(pulled[t.path].start) : "no start date"}`,
+          "aria-label": `Undo adding ${t.title} to the queue`, onclick: () => on.undoStart(t.path) }, "Undo add") : null,
+        h(doc, "button", { class: "dpc-done", title: "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓"))));
   });
   body.append(h(doc, "table", { class: "dpc-table dpc-queue" },
     h(doc, "thead", {}, h(doc, "tr", {}, ["#", "Priority", "Task", "Due", st.mode === "raw" ? "Left" : "Left ×", "", ""].map((c, i) => h(doc, "th", { class: i === 0 || i === 4 ? "dpc-num" : null }, c)))), tb));
@@ -924,6 +927,7 @@ const DEFAULTS = {
   showDone: false,
   boardMode: "week",
   undo: {},
+  pulled: {},
   openOnStartup: true,
   lastMode: "adj",
 };
@@ -956,6 +960,7 @@ class CompanionView extends ItemView {
       setQuery: q => { this.query = q; },
       undoDone: path => p.undoDone(path),
       startNow: path => p.startNow(path),
+      undoStart: path => p.undoStart(path),
       moveCard: (path, key) => p.moveCard(path, key, this.boardMode()),
       setBoardMode: m => { p.settings.boardMode = m; p.saveSettings(); this.refresh(); },
       toggleMore: () => { this.showMore = !this.showMore; this.refresh(); },
@@ -994,7 +999,7 @@ module.exports = class DotpmCompanion extends Plugin {
         if (f.path === normalizePath(this.app.vault.configDir + "/plugins/project-manager/data.json")) this.reloadDotpmConfig().then(() => this.rebuildIndex());
       }));
       this.registerInterval(window.setInterval(() => {
-        if (this.result && this.result.today !== M.localToday()) { this.settings.undo = {}; this.saveSettings(); this.recompute(); }
+        if (this.result && this.result.today !== M.localToday()) { this.settings.undo = {}; this.settings.pulled = {}; this.saveSettings(); this.recompute(); }
       }, 60 * 1000));
       if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("tasks");
     });
@@ -1009,6 +1014,7 @@ module.exports = class DotpmCompanion extends Plugin {
     // Undo entries only live for the day they were made ("Done today" clears at midnight).
     const today = M.localToday();
     this.settings.undo = Object.fromEntries(Object.entries(data.undo || {}).filter(([, v]) => v && v.date === today));
+    this.settings.pulled = Object.fromEntries(Object.entries(data.pulled || {}).filter(([, v]) => v && v.date === today));
   }
   async saveSettings() { await this.saveData(this.settings); }
 
@@ -1114,7 +1120,7 @@ module.exports = class DotpmCompanion extends Plugin {
     this.settings.undo[path] = { prev: t.status, date: M.localToday() };
     await this.saveSettings();
     await this.updateTask(path, { status: M.doneStatusId(this.cfg) });
-    new Notice(`Marked “${t.title}” done.`);
+    this.noticeWithUndo(`Marked “${t.title}” done.`, () => this.undoDone(path));
   }
   // Reopen a task finished today, back to the status it had before (or the first open status).
   async undoDone(path) {
@@ -1128,15 +1134,38 @@ module.exports = class DotpmCompanion extends Plugin {
     await this.updateTask(path, { status: prev });
     new Notice(`Reopened “${t.title}”.`);
   }
-  // Pull a not-yet-started task into today.
+  // Pull a not-yet-started task into today; remember its dates so it can be undone today.
   async startNow(path) {
     const t = this.tasks.get(path);
     if (!t) return;
     const today = M.localToday();
     const patch = { start: today };
     if (t.due && t.due < today) patch.due = today;
+    if (!this.settings.pulled[path]) this.settings.pulled[path] = { start: t.start, due: t.due, date: today };
+    await this.saveSettings();
     await this.updateTask(path, patch);
-    new Notice(`“${t.title}” starts today.`);
+    this.noticeWithUndo(`“${t.title}” added to the queue.`, () => this.undoStart(path));
+  }
+  // Put a pulled-in task back on its original dates.
+  async undoStart(path) {
+    const t = this.tasks.get(path), u = this.settings.pulled[path];
+    if (!t || !u) return;
+    delete this.settings.pulled[path];
+    await this.saveSettings();
+    const patch = { start: u.start || "" };
+    if ((u.due || "") !== (t.due || "")) patch.due = u.due || "";
+    await this.updateTask(path, patch);
+    new Notice(`“${t.title}” is back to starting ${u.start || "unscheduled"}.`);
+  }
+  noticeWithUndo(text, undo) {
+    const frag = document.createDocumentFragment();
+    frag.append(text + " ");
+    const n = new Notice(frag, 8000);
+    const btn = document.createElement("button");
+    btn.textContent = "Undo"; btn.className = "dpc-notice-undo";
+    btn.addEventListener("click", e => { e.stopPropagation(); n.hide && n.hide(); undo(); });
+    const el = n.noticeEl || n.messageEl;
+    if (el) el.append(btn);
   }
   // Board drop: a week column shifts start and due by whole weeks; a status column sets the status.
   async moveCard(path, key, mode) {

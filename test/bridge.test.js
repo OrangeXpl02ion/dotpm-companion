@@ -3,6 +3,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const Module = require("module");
 class TFile { constructor(path) { this.path = path; } }
+global.document = { createDocumentFragment: () => ({ append() {} }), createElement: () => ({ addEventListener() {} }) };
 const stub = { Plugin: class { constructor(app) { this.app = app; } }, ItemView: class {}, PluginSettingTab: class {}, Setting: class {},
   Notice: class { constructor(m) { stub.notices.push(m); } }, TFile, normalizePath: x => x, debounce: f => f, notices: [] };
 const orig = Module._load;
@@ -31,7 +32,7 @@ function make(withDotpm) {
   const p = new Plugin(app);
   p.app = app;
   p.cfg = M.readDotpmConfig({});
-  p.settings = { progressFromChecklist: true, undo: {} };
+  p.settings = { progressFromChecklist: true, undo: {}, pulled: {} };
   p.saveSettings = async () => {};
   const body = M.bodyOf(files["Project/K/_tasks/a.md"]);
   p.tasks = new Map([["Project/K/_tasks/a.md", M.parseTask("Project/K/_tasks/a.md", { "pm-task": true, id: "t1", status: "todo", progress: 0 }, body, p.cfg)]]);
@@ -103,4 +104,27 @@ test("start now moves the start date to today", async () => {
   Object.assign(p.tasks.get(path), { start: "2099-01-01", due: "2099-01-05" });
   await p.startNow(path);
   assert.deepEqual(calls[0][3], { start: M.localToday() });
+});
+
+test("undo add restores the original start and due dates", async () => {
+  const { p, calls } = make(true);
+  const path = "Project/K/_tasks/a.md";
+  Object.assign(p.tasks.get(path), { start: "2099-01-01", due: "2099-01-05" });
+  await p.startNow(path);
+  assert.deepEqual(p.settings.pulled[path], { start: "2099-01-01", due: "2099-01-05", date: M.localToday() });
+  Object.assign(p.tasks.get(path), { start: M.localToday() });
+  await p.undoStart(path);
+  const ups = calls.filter(c => c[0] === "updateTask").map(c => c[3]);
+  assert.deepEqual(ups, [{ start: M.localToday() }, { start: "2099-01-01" }]);
+  assert.equal(p.settings.pulled[path], undefined);
+});
+
+test("undo add also restores a due date that start-now moved", async () => {
+  const { p, calls } = make(true);
+  const path = "Project/K/_tasks/a.md";
+  Object.assign(p.tasks.get(path), { start: "2000-01-01", due: "2000-01-02" });
+  await p.startNow(path);
+  Object.assign(p.tasks.get(path), { start: M.localToday(), due: M.localToday() });
+  await p.undoStart(path);
+  assert.deepEqual(calls.filter(c => c[0] === "updateTask").map(c => c[3])[1], { start: "2000-01-01", due: "2000-01-02" });
 });
