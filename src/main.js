@@ -4,7 +4,10 @@ const M = require("./model");
 const V = require("./views");
 
 const VIEW_TYPE = "dotpm-companion";
-const PROGRESS_DELAY_MS = 6000;
+// Through dotpm's own store the change is visible at once; the file-edit fallback must wait out
+// dotpm's 5 s self-write window or dotpm keeps showing the old value.
+const PROGRESS_DELAY_MS = 1500;
+const FALLBACK_DELAY_MS = 6000;
 const DEFAULTS = {
   capacityFile: "Capacity.md",
   defaultWeeklyHours: 40,
@@ -14,12 +17,14 @@ const DEFAULTS = {
   progressFromChecklist: true,
   multipliers: {},
   multiplierHistory: [],
-  lastTab: "capacity",
+  lastTab: "tasks",
+  showDone: false,
+  openOnStartup: true,
   lastMode: "adj",
 };
 
 class CompanionView extends ItemView {
-  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; }
+  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "dotpm Companion"; }
   getIcon() { return "gauge"; }
@@ -29,14 +34,20 @@ class CompanionView extends ItemView {
     const p = this.plugin;
     const root = this.contentEl;
     V.render(root, {
-      tab: this.tab, mode: this.mode, expanded: this.expanded,
+      tab: this.tab, mode: this.mode, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
+      bridged: !!p.dotpm(),
       cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity }, tasks: p.taskList(), result: p.result,
     }, {
       setTab: t => { this.tab = t; p.settings.lastTab = t; p.saveSettings(); this.refresh(); },
       setMode: m => { this.mode = m; p.settings.lastMode = m; p.saveSettings(); this.refresh(); },
       toggleWeek: w => { this.expanded = this.expanded === w ? null : w; this.refresh(); },
-      openTask: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
+      openTask: path => p.openTask(path),
+      openFile: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
       markDone: path => p.markDone(path),
+      setField: (path, field, value) => p.setTaskField(path, field, value),
+      setShowDone: v => { p.settings.showDone = v; p.saveSettings(); this.refresh(); },
+      toggleGroup: g => { if (this.collapsed.has(g)) this.collapsed.delete(g); else this.collapsed.add(g); this.refresh(); },
+      setQuery: q => { this.query = q; },
       setMultiplier: (k, v) => p.setMultiplier(k, v),
       createCapacity: () => p.createCapacityFile(),
     });
@@ -55,6 +66,7 @@ module.exports = class DotpmCompanion extends Plugin {
     this.registerView(VIEW_TYPE, leaf => new CompanionView(leaf, this));
     this.addRibbonIcon("gauge", "dotpm Companion", () => this.activateView());
     this.addCommand({ id: "open", name: "Open view", callback: () => this.activateView() });
+    this.addCommand({ id: "open-tasks", name: "Open all tasks", callback: () => this.activateView("tasks") });
     this.addCommand({ id: "create-capacity", name: "Create capacity file", callback: () => this.createCapacityFile() });
     this.addCommand({ id: "sync-progress", name: "Update progress from Done-when checklists (all tasks)", callback: () => this.syncAllProgress() });
     this.addSettingTab(new CompanionSettings(this.app, this));
@@ -70,6 +82,7 @@ module.exports = class DotpmCompanion extends Plugin {
         if (f.path === normalizePath(this.app.vault.configDir + "/plugins/project-manager/data.json")) this.reloadDotpmConfig().then(() => this.rebuildIndex());
       }));
       this.registerInterval(window.setInterval(() => { if (this.result && this.result.today !== M.localToday()) this.recompute(); }, 60 * 1000));
+      if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("tasks");
     });
   }
   onunload() { for (const t of this.pendingProgress.values()) clearTimeout(t); }
@@ -126,37 +139,74 @@ module.exports = class DotpmCompanion extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) if (leaf.view instanceof CompanionView) leaf.view.refresh();
   }
 
-  // ---- the one shared save path: minimal line edits in the frontmatter ----
-  // dotpm ignores outside edits to a file for 5 s after it saves that file itself (SELF_WRITE_WINDOW_MS),
-  // so wait 6 s after the last change; otherwise dotpm keeps showing the old progress.
+  // ---- dotpm bridge ----
+  // dotpm keeps tasks in memory; changing them through its own store saves the file and redraws its views.
+  // Internal API, so every call is guarded and falls back to a one-line frontmatter edit.
+  dotpm() {
+    const pm = this.app.plugins && this.app.plugins.plugins && this.app.plugins.plugins["project-manager"];
+    return pm && pm.store && pm.index && typeof pm.store.updateTask === "function" && typeof pm.store.loadProjectByPath === "function"
+      && typeof pm.index.task === "function" ? pm : null;
+  }
+  async updateViaDotpm(taskId, patch) {
+    const pm = this.dotpm();
+    if (!pm) return false;
+    const ref = pm.index.task(taskId);
+    if (!ref || !ref.projectPath) return false;
+    const project = await pm.store.loadProjectByPath(ref.projectPath);
+    if (!project) return false;
+    await pm.store.updateTask(project, taskId, patch);
+    if (["start", "due", "dependencies", "status", "type"].some(k => k in patch) && typeof pm.store.scheduleAfterChange === "function")
+      await pm.store.scheduleAfterChange(project, taskId);
+    if (typeof pm.refreshViews === "function") pm.refreshViews();
+    return true;
+  }
+  // The one shared save path for every write the companion makes to a task.
+  async updateTask(path, patch) {
+    const t = this.tasks.get(path);
+    if (!t) return;
+    try { if (await this.updateViaDotpm(t.id, patch)) return; }
+    catch (e) { console.warn("[dotpm-companion] dotpm update failed; editing the file instead", e); }
+    const lines = {};
+    for (const k in patch) lines[k] = typeof patch[k] === "number" ? String(patch[k]) : JSON.stringify(patch[k]);
+    const f = this.app.vault.getAbstractFileByPath(path);
+    if (f instanceof TFile) await this.app.vault.process(f, text => M.setFrontmatterLines(text, lines));
+  }
   queueProgress(path) {
     clearTimeout(this.pendingProgress.get(path));
-    this.pendingProgress.set(path, setTimeout(() => { this.pendingProgress.delete(path); this.writeProgress(path); }, PROGRESS_DELAY_MS));
+    const delay = this.dotpm() ? PROGRESS_DELAY_MS : FALLBACK_DELAY_MS;
+    this.pendingProgress.set(path, setTimeout(() => { this.pendingProgress.delete(path); this.writeProgress(path); }, delay));
   }
   async writeProgress(path) {
     const t = this.tasks.get(path);
     const pct = t && M.checklistProgress(t.checklist);
     if (pct == null || pct === t.progress) return;
-    await this.editFrontmatter(path, { progress: String(pct) });
-  }
-  async editFrontmatter(path, fields) {
-    const f = this.app.vault.getAbstractFileByPath(path);
-    if (!(f instanceof TFile)) return;
-    await this.app.vault.process(f, text => M.setFrontmatterLines(text, fields));
+    await this.updateTask(path, { progress: pct });
   }
   async syncAllProgress() {
     let n = 0;
     for (const t of this.taskList()) {
       const pct = M.checklistProgress(t.checklist);
-      if (pct != null && pct !== t.progress) { await this.editFrontmatter(t.path, { progress: String(pct) }); n++; }
+      if (pct != null && pct !== t.progress) { await this.updateTask(t.path, { progress: pct }); n++; }
     }
     new Notice(n ? `Updated progress on ${n} task${n === 1 ? "" : "s"}.` : "Progress already matches every checklist.");
   }
   async markDone(path) {
     const t = this.tasks.get(path);
     if (!t) return;
-    await this.editFrontmatter(path, { status: JSON.stringify(M.doneStatusId(this.cfg)) });
+    await this.updateTask(path, { status: M.doneStatusId(this.cfg) });
     new Notice(`Marked “${t.title}” done.`);
+  }
+  async setTaskField(path, field, value) {
+    if (!["status", "priority"].includes(field)) return;
+    await this.updateTask(path, { [field]: value });
+  }
+  // Open in dotpm's task editor when available, otherwise the note itself.
+  openTask(path) {
+    const pm = this.dotpm();
+    try { if (pm && pm.router && typeof pm.router.openTask === "function") { pm.router.openTask({ filePath: path }); return; } }
+    catch (e) { console.warn("[dotpm-companion] could not open dotpm editor", e); }
+    const f = this.app.vault.getAbstractFileByPath(path);
+    if (f instanceof TFile) this.app.workspace.getLeaf(false).openFile(f);
   }
   async setMultiplier(key, value) {
     this.settings.multipliers[key] = value;
@@ -171,9 +221,11 @@ module.exports = class DotpmCompanion extends Plugin {
     await this.loadCapacity(); this.recompute();
     this.app.workspace.getLeaf(true).openFile(f);
   }
-  async activateView() {
+  async activateView(tab) {
+    if (tab) this.settings.lastTab = tab;
     let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
     if (!leaf) { leaf = this.app.workspace.getLeaf("tab"); await leaf.setViewState({ type: VIEW_TYPE, active: true }); }
+    else if (tab && leaf.view instanceof CompanionView) { leaf.view.tab = tab; leaf.view.refresh(); }
     this.app.workspace.revealLeaf(leaf);
   }
 };
@@ -194,8 +246,10 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setPlaceholder("end").setValue(S.rangeEnd).onChange(async v => { if (M.isDate(v)) { S.rangeEnd = v; await save(); } }));
     new Setting(el).setName("Overload threshold").setDesc("Flag a week at this share of available hours (%).")
       .addText(t => t.setValue(String(S.overloadPct)).onChange(async v => { const n = parseFloat(v); if (n > 0) { S.overloadPct = n; await save(); } }));
-    new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks. Updates about 6 seconds after you tick a box.")
+    new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks.")
       .addToggle(t => t.setValue(S.progressFromChecklist).onChange(async v => { S.progressFromChecklist = v; await save(); }));
+    new Setting(el).setName("Open on startup").setDesc("Open the companion on the All tasks tab when Obsidian starts.")
+      .addToggle(t => t.setValue(S.openOnStartup).onChange(async v => { S.openOnStartup = v; await p.saveSettings(); }));
     new Setting(el).setName("Multipliers").setHeading();
     for (const k of V.typeKeys(p.cfg)) {
       new Setting(el).setName(V.typeName(k)).addText(t => t.setValue(String(M.multiplierFor(S.multipliers, k))).onChange(v => {

@@ -337,7 +337,7 @@ function typeColor(cfg, k) {
 }
 
 // ---------- shell ----------
-const TABS = [["capacity", "Capacity"], ["queue", "Queue"], ["types", "Work types"], ["multipliers", "Multipliers"]];
+const TABS = [["tasks", "All tasks"], ["capacity", "Capacity"], ["queue", "Queue"], ["types", "Work types"], ["multipliers", "Multipliers"]];
 function render(root, st, on) {
   const doc = root.ownerDocument;
   root.replaceChildren();
@@ -354,7 +354,7 @@ function render(root, st, on) {
   if (!st.result) { root.append(h(doc, "p", { class: "dpc-muted" }, "Reading tasks…")); return; }
   const body = h(doc, "div", { class: "dpc-body" });
   root.append(body);
-  ({ capacity: renderCapacity, queue: renderQueue, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderCapacity)(body, st, on);
+  ({ tasks: renderTasks, capacity: renderCapacity, queue: renderQueue, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderTasks)(body, st, on);
 }
 
 function taskLink(doc, t, on) {
@@ -364,6 +364,87 @@ function riskBadge(doc, r) {
   if (!r) return null;
   const tip = r.overdue ? "Past its due date with work left" : `Needs ${fmtH(r.need)} (with multiplier) in ${r.days} day${r.days === 1 ? "" : "s"}; ${fmtH(r.available)} available`;
   return h(doc, "span", { class: "dpc-badge dpc-badge-risk", title: tip }, h(doc, "span", { class: "dpc-badge-icon", "aria-hidden": "true" }, "!"), r.overdue ? "Overdue" : "At risk");
+}
+
+// ---------- all tasks ----------
+function projectPathOf(path) { const i = path.indexOf("/_tasks/"); return i === -1 ? path.replace(/\/[^/]+$/, "") : path.slice(0, i); }
+function select(doc, list, value, label, onchange) {
+  const el = h(doc, "select", { class: "dropdown dpc-select", "aria-label": label });
+  for (const o of list) el.append(h(doc, "option", { value: o.id, selected: o.id === value }, o.label));
+  if (!list.some(o => o.id === value)) el.append(h(doc, "option", { value, selected: true }, value || "—"));
+  el.addEventListener("click", e => e.stopPropagation());
+  el.addEventListener("change", () => onchange(el.value));
+  return el;
+}
+function renderTasks(body, st, on) {
+  const doc = body.ownerDocument, R = st.result, cfg = st.cfg, today = R.today, root = st.settings.projectsFolder || cfg.projectsFolder;
+  const showDone = !!st.settings.showDone;
+  const visible = st.tasks.filter(t => showDone || !M.isComplete(cfg, t.status));
+  const groups = new Map();
+  for (const t of visible) { const g = projectPathOf(t.path); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(t); }
+  const keys = [...groups.keys()].sort((a, b) => a.localeCompare(b));
+  const search = h(doc, "input", { type: "search", class: "dpc-search", placeholder: "Filter tasks…", value: st.query || "", "aria-label": "Filter tasks" });
+  const doneBox = h(doc, "input", { type: "checkbox", checked: showDone, id: "dpc-showdone" });
+  doneBox.addEventListener("change", () => on.setShowDone(doneBox.checked));
+  const openCount = st.tasks.filter(t => !M.isComplete(cfg, t.status)).length;
+  body.append(h(doc, "div", { class: "dpc-toolbar" }, search,
+    h(doc, "label", { class: "dpc-check", for: "dpc-showdone" }, doneBox, " Show done"),
+    h(doc, "span", { class: "dpc-muted dpc-right" }, `${openCount} open · ${st.tasks.length} total`),
+    st.bridged === false ? h(doc, "span", { class: "dpc-muted", title: "dotpm isn't loaded, so changes are written to the files directly" }, "· dotpm not loaded") : null));
+  if (!keys.length) { body.append(h(doc, "p", { class: "dpc-muted" }, showDone ? "No tasks." : "No open tasks.")); return; }
+  const tb = h(doc, "tbody");
+  const prio = t => M.priorityRank(cfg, t.priority);
+  for (const g of keys) {
+    const list = groups.get(g).sort((a, b) =>
+      (M.isComplete(cfg, a.status) - M.isComplete(cfg, b.status)) || (a.start || "9999").localeCompare(b.start || "9999") || (a.due || "9999").localeCompare(b.due || "9999") || prio(a) - prio(b));
+    const crumbs = g.startsWith(root) ? g.slice(root.length).split("/") : g.split("/");
+    const left = list.filter(t => !M.isComplete(cfg, t.status)).reduce((a, t) => a + M.remaining(t), 0);
+    const closed = st.collapsed && st.collapsed.has(g);
+    const head = h(doc, "tr", { class: "dpc-group", tabindex: 0, "aria-expanded": !closed, "data-group": g,
+      onclick: () => on.toggleGroup(g), onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); on.toggleGroup(g); } } },
+      h(doc, "td", { colspan: 8 }, h(doc, "span", { class: "dpc-caret", "aria-hidden": "true" }, closed ? "▸" : "▾"),
+        crumbs.slice(0, -1).map(c => h(doc, "span", { class: "dpc-muted" }, `${c} › `)), h(doc, "strong", {}, crumbs.at(-1)),
+        h(doc, "span", { class: "dpc-muted" }, `  ${list.length} task${list.length === 1 ? "" : "s"}${left ? ` · ${fmtH(left)} left` : ""}`)));
+    tb.append(head);
+    if (closed) continue;
+    for (const t of list) {
+      const done = M.isComplete(cfg, t.status);
+      const risk = R.risk[t.path];
+      const hours = t.estimate != null ? `${fmtH(t.logged).replace("h", "")}/${fmtH(t.estimate)}` : (t.logged ? fmtH(t.logged) : "");
+      const pct = Math.max(0, Math.min(100, t.progress || 0));
+      tb.append(h(doc, "tr", { class: "dpc-task-row" + (done ? " is-done" : ""), "data-group": g,
+        "data-search": `${t.title} ${t.project} ${t.workType || ""} ${M.label(cfg.statuses, t.status)} ${M.label(cfg.priorities, t.priority)}`.toLowerCase() },
+        h(doc, "td", { class: "dpc-title-cell" }, t.type === "milestone" ? h(doc, "span", { class: "dpc-muted", title: "Milestone" }, "◆ ") : null,
+          taskLink(doc, t, on), " ", riskBadge(doc, risk),
+          h(doc, "button", { class: "dpc-icon-btn", title: "Open the note", "aria-label": `Open note for ${t.title}`, onclick: e => { e.stopPropagation(); on.openFile(t.path); } }, "↗")),
+        h(doc, "td", {}, select(doc, cfg.statuses, t.status, `Status of ${t.title}`, v => on.setField(t.path, "status", v))),
+        h(doc, "td", {}, select(doc, cfg.priorities, t.priority, `Priority of ${t.title}`, v => on.setField(t.path, "priority", v))),
+        h(doc, "td", { class: "dpc-nowrap dpc-muted" }, t.start ? fmtD(t.start) : ""),
+        h(doc, "td", { class: "dpc-nowrap" + (!done && t.due && t.due < today ? " dpc-warn" : "") }, t.due ? fmtD(t.due) : ""),
+        h(doc, "td", { class: "dpc-num dpc-muted" }, hours),
+        h(doc, "td", {}, h(doc, "div", { class: "dpc-prog" }, h(doc, "div", { class: "dpc-meter dpc-meter-sm", role: "img", "aria-label": `${pct}% done` }, h(doc, "div", { class: "dpc-meter-fill", style: `width:${pct}%` })),
+          h(doc, "span", { class: "dpc-pct" }, `${pct}%`))),
+        h(doc, "td", {}, t.workType ? h(doc, "span", { class: "dpc-type" }, h(doc, "span", { class: "dpc-dot", style: `background:${typeColor(cfg, t.workType)}` }), t.workType) : "")));
+    }
+  }
+  const table = h(doc, "table", { class: "dpc-table dpc-tasks" },
+    h(doc, "thead", {}, h(doc, "tr", {}, ["Task", "Status", "Priority", "Start", "Due", "Hours", "Progress", "Type"].map((c, i) => h(doc, "th", { class: i === 5 ? "dpc-num" : null }, c)))), tb);
+  const empty = h(doc, "p", { class: "dpc-muted", style: "display:none" }, "No tasks match.");
+  body.append(h(doc, "div", { class: "dpc-scroll" }, table), empty);
+  const apply = () => {
+    const q = search.value.trim().toLowerCase();
+    on.setQuery(search.value);
+    let shown = 0; const live = new Set();
+    for (const r of table.querySelectorAll(".dpc-task-row")) {
+      const ok = !q || q.split(/\s+/).every(w => r.dataset.search.includes(w));
+      r.style.display = ok ? "" : "none";
+      if (ok) { shown++; live.add(r.dataset.group); }
+    }
+    for (const r of table.querySelectorAll(".dpc-group")) r.style.display = !q || live.has(r.dataset.group) ? "" : "none";
+    empty.style.display = q && !shown ? "" : "none";
+  };
+  search.addEventListener("input", apply);
+  if (st.query) apply();
 }
 
 // ---------- capacity ----------
@@ -632,7 +713,10 @@ const M = require("./model");
 const V = require("./views");
 
 const VIEW_TYPE = "dotpm-companion";
-const PROGRESS_DELAY_MS = 6000;
+// Through dotpm's own store the change is visible at once; the file-edit fallback must wait out
+// dotpm's 5 s self-write window or dotpm keeps showing the old value.
+const PROGRESS_DELAY_MS = 1500;
+const FALLBACK_DELAY_MS = 6000;
 const DEFAULTS = {
   capacityFile: "Capacity.md",
   defaultWeeklyHours: 40,
@@ -642,12 +726,14 @@ const DEFAULTS = {
   progressFromChecklist: true,
   multipliers: {},
   multiplierHistory: [],
-  lastTab: "capacity",
+  lastTab: "tasks",
+  showDone: false,
+  openOnStartup: true,
   lastMode: "adj",
 };
 
 class CompanionView extends ItemView {
-  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; }
+  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "dotpm Companion"; }
   getIcon() { return "gauge"; }
@@ -657,14 +743,20 @@ class CompanionView extends ItemView {
     const p = this.plugin;
     const root = this.contentEl;
     V.render(root, {
-      tab: this.tab, mode: this.mode, expanded: this.expanded,
+      tab: this.tab, mode: this.mode, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
+      bridged: !!p.dotpm(),
       cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity }, tasks: p.taskList(), result: p.result,
     }, {
       setTab: t => { this.tab = t; p.settings.lastTab = t; p.saveSettings(); this.refresh(); },
       setMode: m => { this.mode = m; p.settings.lastMode = m; p.saveSettings(); this.refresh(); },
       toggleWeek: w => { this.expanded = this.expanded === w ? null : w; this.refresh(); },
-      openTask: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
+      openTask: path => p.openTask(path),
+      openFile: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
       markDone: path => p.markDone(path),
+      setField: (path, field, value) => p.setTaskField(path, field, value),
+      setShowDone: v => { p.settings.showDone = v; p.saveSettings(); this.refresh(); },
+      toggleGroup: g => { if (this.collapsed.has(g)) this.collapsed.delete(g); else this.collapsed.add(g); this.refresh(); },
+      setQuery: q => { this.query = q; },
       setMultiplier: (k, v) => p.setMultiplier(k, v),
       createCapacity: () => p.createCapacityFile(),
     });
@@ -683,6 +775,7 @@ module.exports = class DotpmCompanion extends Plugin {
     this.registerView(VIEW_TYPE, leaf => new CompanionView(leaf, this));
     this.addRibbonIcon("gauge", "dotpm Companion", () => this.activateView());
     this.addCommand({ id: "open", name: "Open view", callback: () => this.activateView() });
+    this.addCommand({ id: "open-tasks", name: "Open all tasks", callback: () => this.activateView("tasks") });
     this.addCommand({ id: "create-capacity", name: "Create capacity file", callback: () => this.createCapacityFile() });
     this.addCommand({ id: "sync-progress", name: "Update progress from Done-when checklists (all tasks)", callback: () => this.syncAllProgress() });
     this.addSettingTab(new CompanionSettings(this.app, this));
@@ -698,6 +791,7 @@ module.exports = class DotpmCompanion extends Plugin {
         if (f.path === normalizePath(this.app.vault.configDir + "/plugins/project-manager/data.json")) this.reloadDotpmConfig().then(() => this.rebuildIndex());
       }));
       this.registerInterval(window.setInterval(() => { if (this.result && this.result.today !== M.localToday()) this.recompute(); }, 60 * 1000));
+      if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("tasks");
     });
   }
   onunload() { for (const t of this.pendingProgress.values()) clearTimeout(t); }
@@ -754,37 +848,74 @@ module.exports = class DotpmCompanion extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) if (leaf.view instanceof CompanionView) leaf.view.refresh();
   }
 
-  // ---- the one shared save path: minimal line edits in the frontmatter ----
-  // dotpm ignores outside edits to a file for 5 s after it saves that file itself (SELF_WRITE_WINDOW_MS),
-  // so wait 6 s after the last change; otherwise dotpm keeps showing the old progress.
+  // ---- dotpm bridge ----
+  // dotpm keeps tasks in memory; changing them through its own store saves the file and redraws its views.
+  // Internal API, so every call is guarded and falls back to a one-line frontmatter edit.
+  dotpm() {
+    const pm = this.app.plugins && this.app.plugins.plugins && this.app.plugins.plugins["project-manager"];
+    return pm && pm.store && pm.index && typeof pm.store.updateTask === "function" && typeof pm.store.loadProjectByPath === "function"
+      && typeof pm.index.task === "function" ? pm : null;
+  }
+  async updateViaDotpm(taskId, patch) {
+    const pm = this.dotpm();
+    if (!pm) return false;
+    const ref = pm.index.task(taskId);
+    if (!ref || !ref.projectPath) return false;
+    const project = await pm.store.loadProjectByPath(ref.projectPath);
+    if (!project) return false;
+    await pm.store.updateTask(project, taskId, patch);
+    if (["start", "due", "dependencies", "status", "type"].some(k => k in patch) && typeof pm.store.scheduleAfterChange === "function")
+      await pm.store.scheduleAfterChange(project, taskId);
+    if (typeof pm.refreshViews === "function") pm.refreshViews();
+    return true;
+  }
+  // The one shared save path for every write the companion makes to a task.
+  async updateTask(path, patch) {
+    const t = this.tasks.get(path);
+    if (!t) return;
+    try { if (await this.updateViaDotpm(t.id, patch)) return; }
+    catch (e) { console.warn("[dotpm-companion] dotpm update failed; editing the file instead", e); }
+    const lines = {};
+    for (const k in patch) lines[k] = typeof patch[k] === "number" ? String(patch[k]) : JSON.stringify(patch[k]);
+    const f = this.app.vault.getAbstractFileByPath(path);
+    if (f instanceof TFile) await this.app.vault.process(f, text => M.setFrontmatterLines(text, lines));
+  }
   queueProgress(path) {
     clearTimeout(this.pendingProgress.get(path));
-    this.pendingProgress.set(path, setTimeout(() => { this.pendingProgress.delete(path); this.writeProgress(path); }, PROGRESS_DELAY_MS));
+    const delay = this.dotpm() ? PROGRESS_DELAY_MS : FALLBACK_DELAY_MS;
+    this.pendingProgress.set(path, setTimeout(() => { this.pendingProgress.delete(path); this.writeProgress(path); }, delay));
   }
   async writeProgress(path) {
     const t = this.tasks.get(path);
     const pct = t && M.checklistProgress(t.checklist);
     if (pct == null || pct === t.progress) return;
-    await this.editFrontmatter(path, { progress: String(pct) });
-  }
-  async editFrontmatter(path, fields) {
-    const f = this.app.vault.getAbstractFileByPath(path);
-    if (!(f instanceof TFile)) return;
-    await this.app.vault.process(f, text => M.setFrontmatterLines(text, fields));
+    await this.updateTask(path, { progress: pct });
   }
   async syncAllProgress() {
     let n = 0;
     for (const t of this.taskList()) {
       const pct = M.checklistProgress(t.checklist);
-      if (pct != null && pct !== t.progress) { await this.editFrontmatter(t.path, { progress: String(pct) }); n++; }
+      if (pct != null && pct !== t.progress) { await this.updateTask(t.path, { progress: pct }); n++; }
     }
     new Notice(n ? `Updated progress on ${n} task${n === 1 ? "" : "s"}.` : "Progress already matches every checklist.");
   }
   async markDone(path) {
     const t = this.tasks.get(path);
     if (!t) return;
-    await this.editFrontmatter(path, { status: JSON.stringify(M.doneStatusId(this.cfg)) });
+    await this.updateTask(path, { status: M.doneStatusId(this.cfg) });
     new Notice(`Marked “${t.title}” done.`);
+  }
+  async setTaskField(path, field, value) {
+    if (!["status", "priority"].includes(field)) return;
+    await this.updateTask(path, { [field]: value });
+  }
+  // Open in dotpm's task editor when available, otherwise the note itself.
+  openTask(path) {
+    const pm = this.dotpm();
+    try { if (pm && pm.router && typeof pm.router.openTask === "function") { pm.router.openTask({ filePath: path }); return; } }
+    catch (e) { console.warn("[dotpm-companion] could not open dotpm editor", e); }
+    const f = this.app.vault.getAbstractFileByPath(path);
+    if (f instanceof TFile) this.app.workspace.getLeaf(false).openFile(f);
   }
   async setMultiplier(key, value) {
     this.settings.multipliers[key] = value;
@@ -799,9 +930,11 @@ module.exports = class DotpmCompanion extends Plugin {
     await this.loadCapacity(); this.recompute();
     this.app.workspace.getLeaf(true).openFile(f);
   }
-  async activateView() {
+  async activateView(tab) {
+    if (tab) this.settings.lastTab = tab;
     let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
     if (!leaf) { leaf = this.app.workspace.getLeaf("tab"); await leaf.setViewState({ type: VIEW_TYPE, active: true }); }
+    else if (tab && leaf.view instanceof CompanionView) { leaf.view.tab = tab; leaf.view.refresh(); }
     this.app.workspace.revealLeaf(leaf);
   }
 };
@@ -822,8 +955,10 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setPlaceholder("end").setValue(S.rangeEnd).onChange(async v => { if (M.isDate(v)) { S.rangeEnd = v; await save(); } }));
     new Setting(el).setName("Overload threshold").setDesc("Flag a week at this share of available hours (%).")
       .addText(t => t.setValue(String(S.overloadPct)).onChange(async v => { const n = parseFloat(v); if (n > 0) { S.overloadPct = n; await save(); } }));
-    new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks. Updates about 6 seconds after you tick a box.")
+    new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks.")
       .addToggle(t => t.setValue(S.progressFromChecklist).onChange(async v => { S.progressFromChecklist = v; await save(); }));
+    new Setting(el).setName("Open on startup").setDesc("Open the companion on the All tasks tab when Obsidian starts.")
+      .addToggle(t => t.setValue(S.openOnStartup).onChange(async v => { S.openOnStartup = v; await p.saveSettings(); }));
     new Setting(el).setName("Multipliers").setHeading();
     for (const k of V.typeKeys(p.cfg)) {
       new Setting(el).setName(V.typeName(k)).addText(t => t.setValue(String(M.multiplierFor(S.multipliers, k))).onChange(v => {

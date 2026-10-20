@@ -26,9 +26,9 @@ window.setup=(o)=>{
   const S=JSON.parse(JSON.stringify(settings)); Object.assign(S,o.settings||{});
   for(const [d,k,v] of (o.changes||[])){S.multipliers[k]=v;S.multiplierHistory=M.recordMultiplier(S.multiplierHistory,d,k,v);}
   const today=o.today||"2026-10-20";
-  const st={tab:o.tab,mode:o.mode||"adj",expanded:o.expanded||null,cfg,settings:S,tasks,result:M.compute(tasks,cfg,S,today)};
+  S.projectsFolder="Project/";const st={tab:o.tab,mode:o.mode||"adj",expanded:o.expanded||null,collapsed:new Set(o.collapsed||[]),query:o.query||"",bridged:true,cfg,settings:S,tasks,result:M.compute(tasks,cfg,S,today)};
   const root=document.getElementById("root");
-  const on={setTab(){},setMode(){},toggleWeek(){},openTask(){},markDone(){},setMultiplier(){},createCapacity(){}};
+  const on={setTab(){},setMode(){},toggleWeek(){},openTask(){},openFile(){},markDone(){},setField(){},setShowDone(){},toggleGroup(){},setQuery(){},setMultiplier(){},createCapacity(){}};
   V.render(root,st,on);
   return {errors:window.__errs||[]};
 };

@@ -44,7 +44,7 @@ function typeColor(cfg, k) {
 }
 
 // ---------- shell ----------
-const TABS = [["capacity", "Capacity"], ["queue", "Queue"], ["types", "Work types"], ["multipliers", "Multipliers"]];
+const TABS = [["tasks", "All tasks"], ["capacity", "Capacity"], ["queue", "Queue"], ["types", "Work types"], ["multipliers", "Multipliers"]];
 function render(root, st, on) {
   const doc = root.ownerDocument;
   root.replaceChildren();
@@ -61,7 +61,7 @@ function render(root, st, on) {
   if (!st.result) { root.append(h(doc, "p", { class: "dpc-muted" }, "Reading tasks…")); return; }
   const body = h(doc, "div", { class: "dpc-body" });
   root.append(body);
-  ({ capacity: renderCapacity, queue: renderQueue, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderCapacity)(body, st, on);
+  ({ tasks: renderTasks, capacity: renderCapacity, queue: renderQueue, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderTasks)(body, st, on);
 }
 
 function taskLink(doc, t, on) {
@@ -71,6 +71,87 @@ function riskBadge(doc, r) {
   if (!r) return null;
   const tip = r.overdue ? "Past its due date with work left" : `Needs ${fmtH(r.need)} (with multiplier) in ${r.days} day${r.days === 1 ? "" : "s"}; ${fmtH(r.available)} available`;
   return h(doc, "span", { class: "dpc-badge dpc-badge-risk", title: tip }, h(doc, "span", { class: "dpc-badge-icon", "aria-hidden": "true" }, "!"), r.overdue ? "Overdue" : "At risk");
+}
+
+// ---------- all tasks ----------
+function projectPathOf(path) { const i = path.indexOf("/_tasks/"); return i === -1 ? path.replace(/\/[^/]+$/, "") : path.slice(0, i); }
+function select(doc, list, value, label, onchange) {
+  const el = h(doc, "select", { class: "dropdown dpc-select", "aria-label": label });
+  for (const o of list) el.append(h(doc, "option", { value: o.id, selected: o.id === value }, o.label));
+  if (!list.some(o => o.id === value)) el.append(h(doc, "option", { value, selected: true }, value || "—"));
+  el.addEventListener("click", e => e.stopPropagation());
+  el.addEventListener("change", () => onchange(el.value));
+  return el;
+}
+function renderTasks(body, st, on) {
+  const doc = body.ownerDocument, R = st.result, cfg = st.cfg, today = R.today, root = st.settings.projectsFolder || cfg.projectsFolder;
+  const showDone = !!st.settings.showDone;
+  const visible = st.tasks.filter(t => showDone || !M.isComplete(cfg, t.status));
+  const groups = new Map();
+  for (const t of visible) { const g = projectPathOf(t.path); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(t); }
+  const keys = [...groups.keys()].sort((a, b) => a.localeCompare(b));
+  const search = h(doc, "input", { type: "search", class: "dpc-search", placeholder: "Filter tasks…", value: st.query || "", "aria-label": "Filter tasks" });
+  const doneBox = h(doc, "input", { type: "checkbox", checked: showDone, id: "dpc-showdone" });
+  doneBox.addEventListener("change", () => on.setShowDone(doneBox.checked));
+  const openCount = st.tasks.filter(t => !M.isComplete(cfg, t.status)).length;
+  body.append(h(doc, "div", { class: "dpc-toolbar" }, search,
+    h(doc, "label", { class: "dpc-check", for: "dpc-showdone" }, doneBox, " Show done"),
+    h(doc, "span", { class: "dpc-muted dpc-right" }, `${openCount} open · ${st.tasks.length} total`),
+    st.bridged === false ? h(doc, "span", { class: "dpc-muted", title: "dotpm isn't loaded, so changes are written to the files directly" }, "· dotpm not loaded") : null));
+  if (!keys.length) { body.append(h(doc, "p", { class: "dpc-muted" }, showDone ? "No tasks." : "No open tasks.")); return; }
+  const tb = h(doc, "tbody");
+  const prio = t => M.priorityRank(cfg, t.priority);
+  for (const g of keys) {
+    const list = groups.get(g).sort((a, b) =>
+      (M.isComplete(cfg, a.status) - M.isComplete(cfg, b.status)) || (a.start || "9999").localeCompare(b.start || "9999") || (a.due || "9999").localeCompare(b.due || "9999") || prio(a) - prio(b));
+    const crumbs = g.startsWith(root) ? g.slice(root.length).split("/") : g.split("/");
+    const left = list.filter(t => !M.isComplete(cfg, t.status)).reduce((a, t) => a + M.remaining(t), 0);
+    const closed = st.collapsed && st.collapsed.has(g);
+    const head = h(doc, "tr", { class: "dpc-group", tabindex: 0, "aria-expanded": !closed, "data-group": g,
+      onclick: () => on.toggleGroup(g), onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); on.toggleGroup(g); } } },
+      h(doc, "td", { colspan: 8 }, h(doc, "span", { class: "dpc-caret", "aria-hidden": "true" }, closed ? "▸" : "▾"),
+        crumbs.slice(0, -1).map(c => h(doc, "span", { class: "dpc-muted" }, `${c} › `)), h(doc, "strong", {}, crumbs.at(-1)),
+        h(doc, "span", { class: "dpc-muted" }, `  ${list.length} task${list.length === 1 ? "" : "s"}${left ? ` · ${fmtH(left)} left` : ""}`)));
+    tb.append(head);
+    if (closed) continue;
+    for (const t of list) {
+      const done = M.isComplete(cfg, t.status);
+      const risk = R.risk[t.path];
+      const hours = t.estimate != null ? `${fmtH(t.logged).replace("h", "")}/${fmtH(t.estimate)}` : (t.logged ? fmtH(t.logged) : "");
+      const pct = Math.max(0, Math.min(100, t.progress || 0));
+      tb.append(h(doc, "tr", { class: "dpc-task-row" + (done ? " is-done" : ""), "data-group": g,
+        "data-search": `${t.title} ${t.project} ${t.workType || ""} ${M.label(cfg.statuses, t.status)} ${M.label(cfg.priorities, t.priority)}`.toLowerCase() },
+        h(doc, "td", { class: "dpc-title-cell" }, t.type === "milestone" ? h(doc, "span", { class: "dpc-muted", title: "Milestone" }, "◆ ") : null,
+          taskLink(doc, t, on), " ", riskBadge(doc, risk),
+          h(doc, "button", { class: "dpc-icon-btn", title: "Open the note", "aria-label": `Open note for ${t.title}`, onclick: e => { e.stopPropagation(); on.openFile(t.path); } }, "↗")),
+        h(doc, "td", {}, select(doc, cfg.statuses, t.status, `Status of ${t.title}`, v => on.setField(t.path, "status", v))),
+        h(doc, "td", {}, select(doc, cfg.priorities, t.priority, `Priority of ${t.title}`, v => on.setField(t.path, "priority", v))),
+        h(doc, "td", { class: "dpc-nowrap dpc-muted" }, t.start ? fmtD(t.start) : ""),
+        h(doc, "td", { class: "dpc-nowrap" + (!done && t.due && t.due < today ? " dpc-warn" : "") }, t.due ? fmtD(t.due) : ""),
+        h(doc, "td", { class: "dpc-num dpc-muted" }, hours),
+        h(doc, "td", {}, h(doc, "div", { class: "dpc-prog" }, h(doc, "div", { class: "dpc-meter dpc-meter-sm", role: "img", "aria-label": `${pct}% done` }, h(doc, "div", { class: "dpc-meter-fill", style: `width:${pct}%` })),
+          h(doc, "span", { class: "dpc-pct" }, `${pct}%`))),
+        h(doc, "td", {}, t.workType ? h(doc, "span", { class: "dpc-type" }, h(doc, "span", { class: "dpc-dot", style: `background:${typeColor(cfg, t.workType)}` }), t.workType) : "")));
+    }
+  }
+  const table = h(doc, "table", { class: "dpc-table dpc-tasks" },
+    h(doc, "thead", {}, h(doc, "tr", {}, ["Task", "Status", "Priority", "Start", "Due", "Hours", "Progress", "Type"].map((c, i) => h(doc, "th", { class: i === 5 ? "dpc-num" : null }, c)))), tb);
+  const empty = h(doc, "p", { class: "dpc-muted", style: "display:none" }, "No tasks match.");
+  body.append(h(doc, "div", { class: "dpc-scroll" }, table), empty);
+  const apply = () => {
+    const q = search.value.trim().toLowerCase();
+    on.setQuery(search.value);
+    let shown = 0; const live = new Set();
+    for (const r of table.querySelectorAll(".dpc-task-row")) {
+      const ok = !q || q.split(/\s+/).every(w => r.dataset.search.includes(w));
+      r.style.display = ok ? "" : "none";
+      if (ok) { shown++; live.add(r.dataset.group); }
+    }
+    for (const r of table.querySelectorAll(".dpc-group")) r.style.display = !q || live.has(r.dataset.group) ? "" : "none";
+    empty.style.display = q && !shown ? "" : "none";
+  };
+  search.addEventListener("input", apply);
+  if (st.query) apply();
 }
 
 // ---------- capacity ----------
