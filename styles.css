@@ -172,10 +172,10 @@
 .dpc-day { background: var(--background-secondary); border-radius: 8px; padding: 6px 6px 5px; text-align: center; }
 .dpc-day.is-today { box-shadow: 0 0 0 1px var(--interactive-accent, var(--text-accent)); }
 .dpc-day-name { font-size: 0.85em; color: var(--text-muted); }
-.dpc-day-bar { position: relative; height: 40px; margin: 4px auto; width: 60%; background: var(--background-modifier-border); border-radius: 4px; overflow: hidden; }
+.dpc-day-bar { position: relative; width: 20px; aspect-ratio: 1 / 5; margin: 6px auto; background: var(--background-modifier-border); border-radius: 4px; overflow: hidden; }
 .dpc-day-fill { position: absolute; left: 0; right: 0; bottom: 0; background: var(--dpc-s1); border-radius: 4px 4px 0 0; }
 .dpc-day.is-over .dpc-day-fill { background: var(--dpc-over); }
-.dpc-day-cap { position: absolute; left: -2px; right: -2px; border-top: 2px dashed var(--text-muted); }
+.dpc-day-cap { position: absolute; left: 0; right: 0; border-top: 2px dashed var(--text-muted); }
 .dpc-day-hrs { font-size: 0.85em; font-variant-numeric: tabular-nums; }
 .dpc-actions { display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
 /* Projects */

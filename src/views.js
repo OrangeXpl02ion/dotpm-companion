@@ -209,7 +209,7 @@ function renderQueue(body, st, on) {
 function renderDays(body, st) {
   const doc = body.ownerDocument, R = st.result;
   if (!R.days || !R.days.length) return;
-  const max = Math.max(1, ...R.days.map(d => Math.max(d.adj, d.available)));
+  const max = 1.15 * Math.max(1, ...R.days.map(d => Math.max(d.adj, d.available))); // headroom so the available line stays visible
   const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   body.append(h(doc, "div", { class: "dpc-days", role: "list", "aria-label": "Committed hours for the next 7 days" }, R.days.map((d, i) => {
     const over = d.adj > d.available + 0.05;
