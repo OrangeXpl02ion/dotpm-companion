@@ -1,0 +1,155 @@
+"use strict";
+const test = require("node:test");
+const assert = require("node:assert/strict");
+const M = require("../src/model.js");
+const fx = require("./fixture/vault.json");
+const cfg = M.readDotpmConfig(fx.dotpm);
+const tasks = fx.tasks.map(t => M.parseTask(t.path, t.fm, t.body, cfg)).filter(Boolean);
+const settings = { rangeStart: "2026-10-19", rangeEnd: "2026-12-11", defaultWeeklyHours: 40, overloadPct: 85, capacity: {},
+  multipliers: Object.fromEntries([...cfg.workTypes, M.NO_TYPE].map(k => [k, 2])) };
+
+test("reads dotpm settings", () => {
+  assert.equal(cfg.projectsFolder, "Project/");
+  assert.equal(cfg.workTypeFieldId, "9as32nw7mvg3hsfb");
+  assert.deepEqual(cfg.workTypes, ["CAD", "Render", "Layout", "Writing", "Fabrication", "Research"]);
+  assert.equal(M.doneStatusId(cfg), "done");
+});
+
+test("parses every real task file, quoted or unquoted", () => {
+  assert.equal(tasks.length, 38);
+  const k = tasks.find(t => t.title === "Kettle Framer page");
+  assert.equal(k.start, "2026-11-24"); assert.equal(k.due, "2026-11-27");
+  assert.equal(k.estimate, 8); assert.equal(k.workType, "Layout"); assert.equal(k.project, "Kettle");
+  const g = tasks.find(t => t.title === "Gardening hero and context renders");
+  assert.equal(g.logged, 2); assert.deepEqual(g.checklist, { done: 2, total: 3 });
+  assert.equal(M.checklistProgress(g.checklist), 67);
+  const s = tasks.find(t => t.title === "study for test");
+  assert.equal(s.due, null);
+  const m = tasks.find(t => t.title === "Gardening Nov 9 presentation");
+  assert.equal(m.type, "milestone");
+});
+
+test("Date objects and blank dates", () => {
+  assert.equal(M.normDate(new Date("2026-11-24T00:00:00Z")), "2026-11-24");
+  assert.equal(M.normDate(""), null);
+  assert.equal(M.normDate("2026-11-24T10:00:00.000Z"), "2026-11-24");
+});
+
+test("checklist stops at the next section and ignores other lists", () => {
+  const body = "Intro\n- [x] not counted\n\n## Done when\n- [x] a\n- [ ] b\n* [X] c\n\nProject: [[K|K]]\n\n## Subtasks\n- [x] [[s|s]]\n";
+  assert.deepEqual(M.parseChecklist(body), { done: 2, total: 3 });
+  assert.equal(M.parseChecklist("no list"), null);
+  assert.equal(M.parseChecklist("## Done when\n\ntext only"), null);
+});
+
+test("ISO weeks", () => {
+  assert.equal(M.isoWeek("2026-10-19"), "2026-W43");
+  assert.equal(M.isoWeek("2026-12-11"), "2026-W50");
+  assert.equal(M.isoWeek("2027-01-01"), "2026-W53");
+  assert.equal(M.mondayOf("2026-10-25"), "2026-10-19");
+});
+
+test("spread rule", () => {
+  const t = { due: "2026-10-25", start: "2026-10-10" };
+  const s = M.spread(t, 14, "2026-10-19"); // past start counts from today: 7 days
+  assert.equal(s.length, 7); assert.equal(s[0][0], "2026-10-19"); assert.equal(s[0][1], 2);
+  assert.deepEqual(M.spread({ due: "2026-10-01" }, 5, "2026-10-19"), [["2026-10-19", 5]]); // overdue → today
+  assert.equal(M.spread({ due: null }, 5, "2026-10-19"), null);
+  assert.equal(M.spread({ due: "2026-11-01", start: "2026-10-30" }, 3, "2026-10-19").length, 3); // future start
+});
+
+test("capacity totals equal remaining hours (nothing lost or double-counted)", () => {
+  const today = "2026-10-20";
+  const R = M.compute(tasks, cfg, settings, today);
+  const open = tasks.filter(t => !M.isComplete(cfg, t.status) && t.due && M.remaining(t) > 0 && t.due <= "2026-12-13");
+  const rawSum = open.reduce((a, t) => a + M.remaining(t), 0);
+  const weeksRaw = R.weeks.reduce((a, w) => a + w.raw, 0);
+  assert.ok(Math.abs(rawSum - weeksRaw) < 1e-6, `${rawSum} vs ${weeksRaw}`);
+  const weeksAdj = R.weeks.reduce((a, w) => a + w.adj, 0);
+  assert.ok(Math.abs(weeksAdj - 2 * weeksRaw) < 1e-6, "all multipliers 2 → adjusted is exactly double");
+  for (const w of R.weeks) {
+    const byType = Object.values(w.byType).reduce((a, b) => a + b, 0);
+    assert.ok(Math.abs(byType - w.adj) < 1e-6);
+  }
+  assert.equal(R.weeks[0].week, "2026-W43"); assert.equal(R.weeks.at(-1).week, "2026-W50");
+  assert.ok(R.weeks[0].isCurrent);
+  assert.ok(R.unscheduled.some(t => t.title === "study for test"));
+});
+
+test("hand-checked week: W48", () => {
+  const today = "2026-10-20";
+  const R = M.compute(tasks, cfg, settings, today);
+  const w = R.weeks.find(x => x.week === "2026-W48");
+  // recompute independently from the spread rule
+  let raw = 0;
+  for (const t of tasks) {
+    if (M.isComplete(cfg, t.status) || !t.due || M.remaining(t) <= 0) continue;
+    const s = M.spread(t, M.remaining(t), today);
+    for (const [d, hh] of s) if (d >= "2026-11-23" && d <= "2026-11-29") raw += hh;
+  }
+  assert.ok(Math.abs(w.raw - raw) < 1e-9);
+});
+
+test("at-risk", () => {
+  const today = "2026-10-20";
+  const R = M.compute(tasks, cfg, settings, today);
+  const ct = tasks.find(t => t.title === "concept table");
+  assert.equal(ct.estimate, null);
+  assert.equal(R.risk[ct.path], undefined, "no estimate → no hours → not at risk");
+  const fake = { path: "x", title: "x", status: "todo", priority: "high", due: "2026-10-21", start: null, estimate: 10, logged: 0, workType: "CAD", logs: [] };
+  const R2 = M.compute([fake], cfg, settings, today);
+  // 20h adjusted over 2 days; 40/7*2 = 11.4h available
+  assert.ok(R2.risk.x && !R2.risk.x.overdue);
+  assert.ok(Math.abs(R2.risk.x.available - 80 / 7) < 1e-9);
+  const R3 = M.compute([{ ...fake, due: "2026-10-01" }], cfg, settings, today);
+  assert.ok(R3.risk.x.overdue);
+});
+
+test("queue order and filters", () => {
+  const today = "2026-10-20";
+  const R = M.compute(tasks, cfg, settings, today);
+  assert.ok(R.queue.every(t => !t.start || t.start <= today));
+  for (let i = 1; i < R.queue.length; i++)
+    assert.ok(M.priorityRank(cfg, R.queue[i - 1].priority) <= M.priorityRank(cfg, R.queue[i].priority));
+  assert.ok(R.upcoming > 20);
+});
+
+test("multiplier history", () => {
+  const S = {};
+  M.ensureMultipliers(S, ["CAD", M.NO_TYPE], "2026-10-20");
+  assert.deepEqual(S.multipliers, { CAD: 2, [M.NO_TYPE]: 2 });
+  assert.equal(S.multiplierHistory.length, 2);
+  assert.equal(M.ensureMultipliers(S, ["CAD"], "2026-10-21"), false);
+  let h = M.recordMultiplier(S.multiplierHistory, "2026-10-27", "CAD", 1.8);
+  h = M.recordMultiplier(h, "2026-10-27", "CAD", 1.7); // same day replaces
+  assert.equal(h.filter(p => p.type === "CAD").length, 2);
+  assert.equal(M.multiplierOn(h, "CAD", "2026-10-26"), 2);
+  assert.equal(M.multiplierOn(h, "CAD", "2026-11-01"), 1.7);
+});
+
+test("capacity file parsing and template round-trip", () => {
+  const md = M.capacityTemplate("2026-10-19", "2026-12-11", 40);
+  const cap = M.parseCapacity(md);
+  assert.equal(Object.keys(cap).length, 8); assert.equal(cap["2026-W43"], 40);
+  const hand = "| Week | Starts | Available hours | Notes |\n|---|---|---|---|\n| 2026-W48 | Nov 23 | 22 | Thanksgiving |\n| 2026-W49 | Nov 30 |  | |\n";
+  assert.deepEqual(M.parseCapacity(hand), { "2026-W48": 22 });
+});
+
+test("measured factor", () => {
+  const done = [{ status: "done", estimate: 4, logged: 6, workType: "CAD" }, { status: "done", estimate: 6, logged: 9, workType: "CAD" }, { status: "todo", estimate: 5, logged: 1, workType: "CAD" }];
+  const m = M.measured(done, cfg);
+  assert.equal(m.CAD.n, 2); assert.equal(m.CAD.factor, 1.5);
+});
+
+test("frontmatter line edits touch only that line", () => {
+  const f = require("./fixture/vault.json").tasks.find(t => t.path.endsWith("kettle-framer-page.md"));
+  const text = "---\npm-task: true\nstatus: todo\nprogress: 0\ndependencies:\n  - \"[[a|a]]\"\n---\n\n## Done when\n- [x] a\n\nProject: [[K|K]]";
+  const out = M.setFrontmatterLines(text, { progress: "50" });
+  assert.equal(out, text.replace("progress: 0", "progress: 50"));
+  assert.equal(M.setFrontmatterLines(out, { status: '"done"' }).split("\n")[2], 'status: "done"');
+  const crlf = text.replace(/\n/g, "\r\n");
+  assert.equal(M.setFrontmatterLines(crlf, { progress: "50" }), crlf.replace("progress: 0", "progress: 50"));
+  assert.equal(M.bodyOf(text).startsWith("\n## Done when"), true);
+  assert.equal(M.setFrontmatterLines("no frontmatter", { progress: "1" }), "no frontmatter");
+  assert.ok(f);
+});
