@@ -30,7 +30,7 @@ window.setup=(o)=>{
   for(const [title,f] of (o.mutate||[])){const t=TS.find(x=>x.title===title); if(t)Object.assign(t,f);}
   S.projectsFolder="Project/";const tasks2=TS;const st={tab:o.tab,mode:o.mode||"adj",expanded:o.expanded||null,collapsed:new Set(o.collapsed||[]),query:o.query||"",bridged:true,projectColors:{"Gardening Studio":"#79b58d","Kettle":"#c47070","About Page":"#8a94a0","Hero Showreel":"#767491","Peloton":"#b8a06b"},cfg,settings:S,tasks:tasks2,result:M.compute(tasks2,cfg,S,today),showMore:!!o.showMore};
   const root=document.getElementById("root");
-  const on={undoDone(){},startNow(){},moveCard(){},setBoardMode(){},toggleMore(){},setTab(){},setMode(){},toggleWeek(){},openTask(){},openFile(){},markDone(){},setField(){},setShowDone(){},toggleGroup(){},setQuery(){},setMultiplier(){},createCapacity(){}};
+  const on={mountDotpm(h){throw new Error("dotpm's project view isn't registered (is dotpm enabled?)")},openDotpmTab(){},undoStart(){},undoDone(){},startNow(){},moveCard(){},setBoardMode(){},toggleMore(){},setTab(){},setMode(){},toggleWeek(){},openTask(){},openFile(){},markDone(){},setField(){},setShowDone(){},toggleGroup(){},setQuery(){},setMultiplier(){},createCapacity(){}};
   V.render(root,st,on);
   return {errors:window.__errs||[]};
 };

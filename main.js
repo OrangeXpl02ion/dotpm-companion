@@ -407,24 +407,26 @@ function typeColor(cfg, k) {
 }
 
 // ---------- shell ----------
-const TABS = [["tasks", "All tasks"], ["board", "Board"], ["queue", "Queue"], ["capacity", "Capacity"], ["types", "Work types"], ["multipliers", "Multipliers"]];
+const TABS = [["dotpm", "dotpm"], ["board", "Board"], ["capacity", "Capacity"], ["types", "Work types"], ["multipliers", "Multipliers"]];
 function render(root, st, on) {
   const doc = root.ownerDocument;
   root.replaceChildren();
   root.classList.add("dpc-root");
+  root.classList.toggle("dpc-embed", st.tab === "dotpm");
   const bar = h(doc, "div", { class: "dpc-bar" },
     h(doc, "div", { class: "dpc-tabs", role: "tablist" }, TABS.map(([id, name]) =>
       h(doc, "button", { class: "dpc-tab" + (st.tab === id ? " is-active" : ""), role: "tab", "aria-selected": st.tab === id, onclick: () => on.setTab(id) }, name))),
-    st.tab === "queue" || st.tab === "types"
+    (st.tab === "board" && st.settings.boardMode !== "week") || st.tab === "types"
       ? h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Hours shown" },
           [["adj", "× multipliers"], ["raw", "Raw estimates"]].map(([id, name]) =>
             h(doc, "button", { class: "dpc-seg-btn" + (st.mode === id ? " is-active" : ""), "aria-pressed": st.mode === id, onclick: () => on.setMode(id) }, name)))
       : null);
   root.append(bar);
+  if (st.tab === "dotpm") { renderDotpm(root, st, on); return; }
   if (!st.result) { root.append(h(doc, "p", { class: "dpc-muted" }, "Reading tasks…")); return; }
   const body = h(doc, "div", { class: "dpc-body" });
   root.append(body);
-  ({ tasks: renderTasks, board: renderBoard, capacity: renderCapacity, queue: renderQueue, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderTasks)(body, st, on);
+  ({ board: renderBoard, capacity: renderCapacity, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderBoard)(body, st, on);
 }
 
 function taskLink(doc, t, on) {
@@ -436,85 +438,17 @@ function riskBadge(doc, r) {
   return h(doc, "span", { class: "dpc-badge dpc-badge-risk", title: tip }, h(doc, "span", { class: "dpc-badge-icon", "aria-hidden": "true" }, "!"), r.overdue ? "Overdue" : "At risk");
 }
 
-// ---------- all tasks ----------
-function projectPathOf(path) { const i = path.indexOf("/_tasks/"); return i === -1 ? path.replace(/\/[^/]+$/, "") : path.slice(0, i); }
-function select(doc, list, value, label, onchange) {
-  const el = h(doc, "select", { class: "dropdown dpc-select", "aria-label": label });
-  for (const o of list) el.append(h(doc, "option", { value: o.id, selected: o.id === value }, o.label));
-  if (!list.some(o => o.id === value)) el.append(h(doc, "option", { value, selected: true }, value || "—"));
-  el.addEventListener("click", e => e.stopPropagation());
-  el.addEventListener("change", () => onchange(el.value));
-  return el;
-}
-function renderTasks(body, st, on) {
-  const doc = body.ownerDocument, R = st.result, cfg = st.cfg, today = R.today, root = st.settings.projectsFolder || cfg.projectsFolder;
-  const showDone = !!st.settings.showDone;
-  const visible = st.tasks.filter(t => showDone || !M.isComplete(cfg, t.status));
-  const groups = new Map();
-  for (const t of visible) { const g = projectPathOf(t.path); if (!groups.has(g)) groups.set(g, []); groups.get(g).push(t); }
-  const keys = [...groups.keys()].sort((a, b) => a.localeCompare(b));
-  const search = h(doc, "input", { type: "search", class: "dpc-search", placeholder: "Filter tasks…", value: st.query || "", "aria-label": "Filter tasks" });
-  const doneBox = h(doc, "input", { type: "checkbox", checked: showDone, id: "dpc-showdone" });
-  doneBox.addEventListener("change", () => on.setShowDone(doneBox.checked));
-  const openCount = st.tasks.filter(t => !M.isComplete(cfg, t.status)).length;
-  body.append(h(doc, "div", { class: "dpc-toolbar" }, search,
-    h(doc, "label", { class: "dpc-check", for: "dpc-showdone" }, doneBox, " Show done"),
-    h(doc, "span", { class: "dpc-muted dpc-right" }, `${openCount} open · ${st.tasks.length} total`),
-    st.bridged === false ? h(doc, "span", { class: "dpc-muted", title: "dotpm isn't loaded, so changes are written to the files directly" }, "· dotpm not loaded") : null));
-  if (!keys.length) { body.append(h(doc, "p", { class: "dpc-muted" }, showDone ? "No tasks." : "No open tasks.")); return; }
-  const tb = h(doc, "tbody");
-  const prio = t => M.priorityRank(cfg, t.priority);
-  for (const g of keys) {
-    const list = groups.get(g).sort((a, b) =>
-      (M.isComplete(cfg, a.status) - M.isComplete(cfg, b.status)) || (a.start || "9999").localeCompare(b.start || "9999") || (a.due || "9999").localeCompare(b.due || "9999") || prio(a) - prio(b));
-    const crumbs = g.startsWith(root) ? g.slice(root.length).split("/") : g.split("/");
-    const left = list.filter(t => !M.isComplete(cfg, t.status)).reduce((a, t) => a + M.remaining(t), 0);
-    const closed = st.collapsed && st.collapsed.has(g);
-    const head = h(doc, "tr", { class: "dpc-group", tabindex: 0, "aria-expanded": !closed, "data-group": g,
-      onclick: () => on.toggleGroup(g), onkeydown: e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); on.toggleGroup(g); } } },
-      h(doc, "td", { colspan: 8 }, h(doc, "span", { class: "dpc-caret", "aria-hidden": "true" }, closed ? "▸" : "▾"),
-        crumbs.slice(0, -1).map(c => h(doc, "span", { class: "dpc-muted" }, `${c} › `)), h(doc, "strong", {}, crumbs.at(-1)),
-        h(doc, "span", { class: "dpc-muted" }, `  ${list.length} task${list.length === 1 ? "" : "s"}${left ? ` · ${fmtH(left)} left` : ""}`)));
-    tb.append(head);
-    if (closed) continue;
-    for (const t of list) {
-      const done = M.isComplete(cfg, t.status);
-      const risk = R.risk[t.path];
-      const hours = t.estimate != null ? `${fmtH(t.logged).replace("h", "")}/${fmtH(t.estimate)}` : (t.logged ? fmtH(t.logged) : "");
-      const pct = Math.max(0, Math.min(100, t.progress || 0));
-      tb.append(h(doc, "tr", { class: "dpc-task-row" + (done ? " is-done" : ""), "data-group": g,
-        "data-search": `${t.title} ${t.project} ${t.workType || ""} ${M.label(cfg.statuses, t.status)} ${M.label(cfg.priorities, t.priority)}`.toLowerCase() },
-        h(doc, "td", { class: "dpc-title-cell" }, t.type === "milestone" ? h(doc, "span", { class: "dpc-muted", title: "Milestone" }, "◆ ") : null,
-          taskLink(doc, t, on), " ", riskBadge(doc, risk),
-          h(doc, "button", { class: "dpc-icon-btn", title: "Open the note", "aria-label": `Open note for ${t.title}`, onclick: e => { e.stopPropagation(); on.openFile(t.path); } }, "↗")),
-        h(doc, "td", {}, select(doc, cfg.statuses, t.status, `Status of ${t.title}`, v => on.setField(t.path, "status", v))),
-        h(doc, "td", {}, select(doc, cfg.priorities, t.priority, `Priority of ${t.title}`, v => on.setField(t.path, "priority", v))),
-        h(doc, "td", { class: "dpc-nowrap dpc-muted" }, t.start ? fmtD(t.start) : ""),
-        h(doc, "td", { class: "dpc-nowrap" + (!done && t.due && t.due < today ? " dpc-warn" : "") }, t.due ? fmtD(t.due) : ""),
-        h(doc, "td", { class: "dpc-num dpc-muted" }, hours),
-        h(doc, "td", {}, h(doc, "div", { class: "dpc-prog" }, h(doc, "div", { class: "dpc-meter dpc-meter-sm", role: "img", "aria-label": `${pct}% done` }, h(doc, "div", { class: "dpc-meter-fill", style: `width:${pct}%` })),
-          h(doc, "span", { class: "dpc-pct" }, `${pct}%`))),
-        h(doc, "td", {}, t.workType ? h(doc, "span", { class: "dpc-type" }, h(doc, "span", { class: "dpc-dot", style: `background:${typeColor(cfg, t.workType)}` }), t.workType) : "")));
-    }
-  }
-  const table = h(doc, "table", { class: "dpc-table dpc-tasks" },
-    h(doc, "thead", {}, h(doc, "tr", {}, ["Task", "Status", "Priority", "Start", "Due", "Hours", "Progress", "Type"].map((c, i) => h(doc, "th", { class: i === 5 ? "dpc-num" : null }, c)))), tb);
-  const empty = h(doc, "p", { class: "dpc-muted", style: "display:none" }, "No tasks match.");
-  body.append(h(doc, "div", { class: "dpc-scroll" }, table), empty);
-  const apply = () => {
-    const q = search.value.trim().toLowerCase();
-    on.setQuery(search.value);
-    let shown = 0; const live = new Set();
-    for (const r of table.querySelectorAll(".dpc-task-row")) {
-      const ok = !q || q.split(/\s+/).every(w => r.dataset.search.includes(w));
-      r.style.display = ok ? "" : "none";
-      if (ok) { shown++; live.add(r.dataset.group); }
-    }
-    for (const r of table.querySelectorAll(".dpc-group")) r.style.display = !q || live.has(r.dataset.group) ? "" : "none";
-    empty.style.display = q && !shown ? "" : "none";
-  };
-  search.addEventListener("input", apply);
-  if (st.query) apply();
+// ---------- dotpm ----------
+// dotpm's own project view (table, Gantt, Kanban) hosted in this tab; see CompanionView.mountDotpm.
+function renderDotpm(root, st, on) {
+  const doc = root.ownerDocument;
+  const fallback = msg => root.append(h(doc, "div", { class: "dpc-note" },
+    h(doc, "p", {}, "dotpm couldn't be shown inside the companion", msg ? `: ${msg}` : ".", " You can still open it in its own tab."),
+    h(doc, "button", { class: "mod-cta", onclick: () => on.openDotpmTab() }, "Open dotpm")));
+  if (st.dotpmError) { fallback(st.dotpmError); return; }
+  const host = h(doc, "div", { class: "dpc-embed-host" });
+  root.append(host);
+  try { on.mountDotpm(host); } catch (e) { host.remove(); fallback(e && e.message); }
 }
 
 // ---------- capacity ----------
@@ -649,22 +583,16 @@ function renderMore(body, st, on, open) {
 // Styled after dotpm's own kanban: colored column tops with count pills, compact cards with hours,
 // progress, a project chip and the due date. Actions (✓, Move…) show on hover, always on touch screens.
 function renderBoard(body, st, on) {
-  const doc = body.ownerDocument, R = st.result, cfg = st.cfg;
-  const mode = st.settings.boardMode === "status" ? "status" : "week";
+  const doc = body.ownerDocument, R = st.result;
+  const mode = st.settings.boardMode === "week" ? "week" : "today";
   body.append(h(doc, "div", { class: "dpc-toolbar" },
-    h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board columns" }, [["week", "By week due"], ["status", "By status"]].map(([id, name]) =>
+    h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board view" }, [["today", "Today"], ["week", "By week"]].map(([id, name]) =>
       h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
-    h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates." : "Drag a card to change its status.")));
-  const open = st.tasks.filter(t => !M.isComplete(cfg, t.status));
-  let cols;
-  if (mode === "week") cols = R.board.map(c => ({ ...c, color: c.key === "overdue" ? "var(--dpc-risk)" : c.week && c.week.overloaded ? "var(--dpc-over)" : c.week && c.week.isCurrent ? "var(--interactive-accent, var(--text-accent))" : "var(--text-faint)" }));
-  else {
-    const order = R.queue.concat(open.filter(t => !R.queue.includes(t)));
-    cols = cfg.statuses.map(x => ({ key: x.id, label: x.label, color: x.color || "var(--text-faint)", done: !!x.complete,
-      tasks: x.complete ? st.tasks.filter(t => t.status === x.id).sort((a, b) => (b.completed || "").localeCompare(a.completed || "")) : order.filter(t => t.status === x.id) }));
-  }
-  const targets = mode === "week" ? R.board.filter(c => c.week).map(c => ({ key: c.key, label: c.week.isCurrent ? "This week" : `${c.key.slice(5)} · ${fmtD(c.week.start)}` }))
-    : cfg.statuses.map(x => ({ key: x.id, label: x.label }));
+    h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates."
+      : "Started tasks, best priority first. Finish them here or pull in more.")));
+  if (mode === "today") { renderQueue(body, st, on); return; }
+  const cols = R.board.map(c => ({ ...c, color: c.key === "overdue" ? "var(--dpc-risk)" : c.week && c.week.overloaded ? "var(--dpc-over)" : c.week && c.week.isCurrent ? "var(--interactive-accent, var(--text-accent))" : "var(--text-faint)" }));
+  const targets = R.board.filter(c => c.week).map(c => ({ key: c.key, label: c.week.isCurrent ? "This week" : `${c.key.slice(5)} · ${fmtD(c.week.start)}` }));
   const wrap = h(doc, "div", { class: "dpc-board" });
   for (const c of cols) {
     const w = c.week;
@@ -675,10 +603,9 @@ function renderBoard(body, st, on) {
             h(doc, "div", { class: "dpc-meter-fill", style: `width:${Math.min(100, w.pct * 100)}%` })),
           h(doc, "span", { class: "dpc-muted dpc-nowrap", title: "Committed this week (× multipliers) of available hours" }, `${fmtH(w.adj)}/${fmtH(w.available)}`)) : null);
     const list = h(doc, "div", { class: "dpc-col-list" });
-    for (const t of c.tasks) list.append(card(doc, t, st, on, mode, targets));
+    for (const t of c.tasks) list.append(card(doc, t, st, on, "week", targets));
     const col = h(doc, "section", { class: "dpc-col" + (w && w.isCurrent ? " is-current" : ""), style: `--dpc-col:${c.color}`, "aria-label": c.label }, head, list);
-    const droppable = mode === "status" ? true : !!w;
-    if (droppable) {
+    if (w) {
       col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("is-drop"); });
       col.addEventListener("dragleave", e => { if (!col.contains(e.relatedTarget)) col.classList.remove("is-drop"); });
       col.addEventListener("drop", e => { e.preventDefault(); col.classList.remove("is-drop"); const p = e.dataTransfer.getData("text/plain"); if (p) on.moveCard(p, c.key); });
@@ -700,7 +627,7 @@ function card(doc, t, st, on, mode, targets) {
   const pct = Math.max(0, Math.min(100, t.progress || 0));
   const hrs = t.estimate != null ? `${fmtH(t.logged).replace("h", "")}/${fmtH(t.estimate)}` : t.logged ? fmtH(t.logged) : null;
   const projColor = (st.projectColors && st.projectColors[t.project]) || "var(--text-faint)";
-  const cur = mode === "status" ? t.status : (t.due ? M.isoWeek(t.due) : "");
+  const cur = t.due ? M.isoWeek(t.due) : "";
   const move = h(doc, "select", { class: "dropdown dpc-move", "aria-label": `Move ${t.title}` },
     h(doc, "option", { value: "", selected: true, disabled: true }, "Move…"), targets.filter(x => x.key !== cur).map(x => h(doc, "option", { value: x.key }, x.label)));
   move.addEventListener("change", () => { if (move.value) on.moveCard(t.path, move.value); });
@@ -923,9 +850,11 @@ const DEFAULTS = {
   progressFromChecklist: true,
   multipliers: {},
   multiplierHistory: [],
-  lastTab: "tasks",
+  lastTab: "dotpm",
+  dotpmScope: "",
+  dotpmState: null,
   showDone: false,
-  boardMode: "week",
+  boardMode: "today",
   undo: {},
   pulled: {},
   openOnStartup: true,
@@ -933,35 +862,89 @@ const DEFAULTS = {
 };
 
 class CompanionView extends ItemView {
-  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; }
-  boardMode() { return this.plugin.settings.boardMode === "status" ? "status" : "week"; }
+  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = ({ tasks: "dotpm", queue: "board" })[plugin.settings.lastTab] || plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "dotpm Companion"; }
   getIcon() { return "gauge"; }
   async onOpen() { this.refresh(); }
-  onResize() { this.refresh(); }
+  onResize() {
+    if (this.tab === "dotpm") { try { this.dotpmView && this.dotpmView.onResize && this.dotpmView.onResize(); } catch (e) { /* ignore */ } return; }
+    this.refresh();
+  }
+  async onClose() { this.unmountDotpm(); }
+
+  // ---- dotpm's own project view, hosted inside this tab ----
+  // dotpm's view is created through its registered factory with a stand-in leaf: when dotpm wants to
+  // reload "its" tab (switching scope), the change is applied to the hosted view instead of replacing
+  // this companion tab; anything else dotpm opens (task editor, overview) goes to a normal new tab.
+  mountDotpm(host) {
+    const p = this.plugin;
+    if (this.dotpmView) { host.append(this.dotpmView.containerEl); this.scope = this.dotpmView.scope || this.scope; return; }
+    const factory = this.app.viewRegistry && this.app.viewRegistry.viewByType && this.app.viewRegistry.viewByType["pm-project"];
+    if (typeof factory !== "function") throw new Error("dotpm's project view isn't registered (is dotpm enabled?)");
+    const self = this;
+    const leaf = Object.create(this.leaf);
+    leaf.setViewState = async (vs, eState) => {
+      if (vs && vs.type === "pm-project" && self.dotpmView) { await self.dotpmView.setState(vs.state || {}, { history: false }); self.saveDotpmState(); return; }
+      const other = self.app.workspace.getLeaf("tab"); await other.setViewState(vs, eState);
+    };
+    leaf.getViewState = () => ({ type: "pm-project", state: self.dotpmView ? self.dotpmView.getState() : {} });
+    const v = factory(leaf);
+    this.dotpmView = v;
+    v.containerEl.addClass("dpc-embedded");
+    v.containerEl.setAttribute("data-type", "pm-project");
+    host.append(v.containerEl);
+    v.load();
+    const state = p.settings.dotpmState && p.settings.dotpmState.scope ? p.settings.dotpmState : { scope: { kind: "project", path: p.rootProjectPath() } };
+    this.dotpmReady = (async () => {
+      await v.setState(state, { history: false });
+      await v.onOpen();
+      this.scope = v.scope || this.scope;
+    })();
+    this.dotpmReady.catch(e => { console.error("[dotpm-companion] dotpm view failed", e); this.unmountDotpm(); this.dotpmError = e; this.refresh(); });
+  }
+  saveDotpmState() {
+    try { const st = this.dotpmView.getState(); if (st && st.scope) { this.plugin.settings.dotpmState = { scope: st.scope }; this.plugin.saveSettings(); } } catch (e) { /* ignore */ }
+  }
+  unmountDotpm() {
+    const v = this.dotpmView;
+    if (!v) return;
+    this.saveDotpmState();
+    this.dotpmView = null;
+    try { v.onClose && v.onClose(); } catch (e) { /* ignore */ }
+    try { v.unload(); } catch (e) { /* ignore */ }
+    v.containerEl.remove();
+  }
+  switchTab(t) {
+    if (this.tab === "dotpm" && t !== "dotpm") { this.saveDotpmState(); this.scope = null; }
+    this.tab = t; this.plugin.settings.lastTab = t; this.plugin.saveSettings();
+    this.dotpmError = null;
+    if (t !== "dotpm" || !this.dotpmView || !this.dotpmView.containerEl.isConnected) this.contentEl.empty();
+    this.refresh();
+  }
   refresh() {
     const p = this.plugin;
     const root = this.contentEl;
+    // dotpm redraws itself; leave it alone while it's showing.
+    if (this.tab === "dotpm" && this.dotpmView && this.dotpmView.containerEl.isConnected) return;
     V.render(root, {
       tab: this.tab, mode: this.mode, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
-      bridged: !!p.dotpm(), showMore: !!this.showMore, projectColors: p.projectColors,
+      bridged: !!p.dotpm(), showMore: !!this.showMore, projectColors: p.projectColors, dotpmError: this.dotpmError ? String(this.dotpmError.message || this.dotpmError) : null,
       cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity }, tasks: p.taskList(), result: p.result,
     }, {
-      setTab: t => { this.tab = t; p.settings.lastTab = t; p.saveSettings(); this.refresh(); },
+      setTab: t => this.switchTab(t),
+      mountDotpm: host => this.mountDotpm(host),
+      openDotpmTab: () => p.openDotpmInTab(),
       setMode: m => { this.mode = m; p.settings.lastMode = m; p.saveSettings(); this.refresh(); },
       toggleWeek: w => { this.expanded = this.expanded === w ? null : w; this.refresh(); },
       openTask: path => p.openTask(path),
       openFile: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
       markDone: path => p.markDone(path),
       setField: (path, field, value) => p.setTaskField(path, field, value),
-      setShowDone: v => { p.settings.showDone = v; p.saveSettings(); this.refresh(); },
-      toggleGroup: g => { if (this.collapsed.has(g)) this.collapsed.delete(g); else this.collapsed.add(g); this.refresh(); },
-      setQuery: q => { this.query = q; },
       undoDone: path => p.undoDone(path),
       startNow: path => p.startNow(path),
       undoStart: path => p.undoStart(path),
-      moveCard: (path, key) => p.moveCard(path, key, this.boardMode()),
+      moveCard: (path, key) => p.moveCard(path, key),
       setBoardMode: m => { p.settings.boardMode = m; p.saveSettings(); this.refresh(); },
       toggleMore: () => { this.showMore = !this.showMore; this.refresh(); },
       setMultiplier: (k, v) => p.setMultiplier(k, v),
@@ -970,10 +953,11 @@ class CompanionView extends ItemView {
   }
 }
 
-module.exports = class DotpmCompanion extends Plugin {
+const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   async onload() {
     this.tasks = new Map();
     this.projectColors = {};
+    this.projectNotes = {};
     this.capacity = {};
     this.result = null;
     this.pendingProgress = new Map();
@@ -983,7 +967,8 @@ module.exports = class DotpmCompanion extends Plugin {
     this.registerView(VIEW_TYPE, leaf => new CompanionView(leaf, this));
     this.addRibbonIcon("gauge", "dotpm Companion", () => this.activateView());
     this.addCommand({ id: "open", name: "Open view", callback: () => this.activateView() });
-    this.addCommand({ id: "open-tasks", name: "Open all tasks", callback: () => this.activateView("tasks") });
+    this.addCommand({ id: "open-dotpm", name: "Open dotpm tab", callback: () => this.activateView("dotpm") });
+    this.addCommand({ id: "open-today", name: "Open today's queue", callback: () => { this.settings.boardMode = "today"; this.activateView("board"); } });
     this.addCommand({ id: "create-capacity", name: "Create capacity file", callback: () => this.createCapacityFile() });
     this.addCommand({ id: "sync-progress", name: "Update progress from Done-when checklists (all tasks)", callback: () => this.syncAllProgress() });
     this.addSettingTab(new CompanionSettings(this.app, this));
@@ -1001,7 +986,7 @@ module.exports = class DotpmCompanion extends Plugin {
       this.registerInterval(window.setInterval(() => {
         if (this.result && this.result.today !== M.localToday()) { this.settings.undo = {}; this.settings.pulled = {}; this.saveSettings(); this.recompute(); }
       }, 60 * 1000));
-      if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("tasks");
+      if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("dotpm");
     });
   }
   onunload() { for (const t of this.pendingProgress.values()) clearTimeout(t); }
@@ -1031,7 +1016,10 @@ module.exports = class DotpmCompanion extends Plugin {
   async indexFile(file, content) {
     if (!(file instanceof TFile) || !this.inProjects(file.path)) return null;
     const fm = (this.app.metadataCache.getFileCache(file) || {}).frontmatter;
-    if (fm && fm["pm-project"] === true && typeof fm.title === "string") this.projectColors[fm.title] = typeof fm.color === "string" ? fm.color : null;
+    if (fm && fm["pm-project"] === true && typeof fm.title === "string") {
+      this.projectColors[fm.title] = typeof fm.color === "string" ? fm.color : null;
+      this.projectNotes[file.path] = { title: fm.title, parent: typeof fm.parent === "string" && fm.parent ? fm.parent : null };
+    }
     if (!fm || fm["pm-task"] !== true) { this.tasks.delete(file.path); return null; }
     const text = content != null ? content : await this.app.vault.cachedRead(file);
     const t = M.parseTask(file.path, fm, M.bodyOf(text), this.cfg);
@@ -1167,11 +1155,10 @@ module.exports = class DotpmCompanion extends Plugin {
     const el = n.noticeEl || n.messageEl;
     if (el) el.append(btn);
   }
-  // Board drop: a week column shifts start and due by whole weeks; a status column sets the status.
-  async moveCard(path, key, mode) {
+  // Board drop: a week column shifts start and due by whole weeks.
+  async moveCard(path, key) {
     const t = this.tasks.get(path);
     if (!t) return;
-    if (mode === "status") { if (key !== t.status && this.cfg.statuses.some(x => x.id === key)) await this.updateTask(path, { status: key }); return; }
     const w = this.result && this.result.weeks.find(x => x.week === key);
     if (!w) return;
     const patch = M.shiftToWeek(t, w.start);
@@ -1206,11 +1193,22 @@ module.exports = class DotpmCompanion extends Plugin {
     await this.loadCapacity(); this.recompute();
     this.app.workspace.getLeaf(true).openFile(f);
   }
+  // Top-level project for the dotpm tab: the one chosen in settings, else the first project with no parent.
+  rootProjectPath() {
+    const notes = this.projectNotes;
+    if (this.settings.dotpmScope && notes[this.settings.dotpmScope]) return this.settings.dotpmScope;
+    const roots = Object.keys(notes).filter(k => !notes[k].parent).sort();
+    return roots[0] || Object.keys(notes).sort()[0] || "";
+  }
+  async openDotpmInTab() {
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.setViewState({ type: "pm-project", active: true, state: { scope: { kind: "project", path: this.rootProjectPath() } } });
+  }
   async activateView(tab) {
     if (tab) this.settings.lastTab = tab;
     let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
     if (!leaf) { leaf = this.app.workspace.getLeaf("tab"); await leaf.setViewState({ type: VIEW_TYPE, active: true }); }
-    else if (tab && leaf.view instanceof CompanionView) { leaf.view.tab = tab; leaf.view.refresh(); }
+    else if (tab && leaf.view instanceof CompanionView) leaf.view.switchTab(tab);
     this.app.workspace.revealLeaf(leaf);
   }
 };
@@ -1233,7 +1231,13 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setValue(String(S.overloadPct)).onChange(async v => { const n = parseFloat(v); if (n > 0) { S.overloadPct = n; await save(); } }));
     new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks.")
       .addToggle(t => t.setValue(S.progressFromChecklist).onChange(async v => { S.progressFromChecklist = v; await save(); }));
-    new Setting(el).setName("Open on startup").setDesc("Open the companion on the All tasks tab when Obsidian starts.")
+    new Setting(el).setName("dotpm tab project").setDesc("Project the dotpm tab opens on. Its sub-projects are included.")
+      .addDropdown(d => {
+        d.addOption("", "Top-level project (automatic)");
+        for (const k of Object.keys(p.projectNotes).sort()) d.addOption(k, p.projectNotes[k].title + (p.projectNotes[k].parent ? "" : " (top level)"));
+        d.setValue(S.dotpmScope || "").onChange(async v => { S.dotpmScope = v; S.dotpmState = null; await p.saveSettings(); });
+      });
+    new Setting(el).setName("Open on startup").setDesc("Open the companion on the dotpm tab when Obsidian starts.")
       .addToggle(t => t.setValue(S.openOnStartup).onChange(async v => { S.openOnStartup = v; await p.saveSettings(); }));
     new Setting(el).setName("Multipliers").setHeading();
     for (const k of V.typeKeys(p.cfg)) {
@@ -1243,6 +1247,7 @@ class CompanionSettings extends PluginSettingTab {
     }
   }
 }
+module.exports.CompanionView = CompanionView;
 
 };
 module.exports = __req("./main");

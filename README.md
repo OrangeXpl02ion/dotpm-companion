@@ -2,17 +2,16 @@
 
 An Obsidian plugin that sits beside [dotpm](https://dotpm.pm) and adds cross-project planning views. It reads dotpm's Markdown task files as the only source of truth and never renames, moves or re-IDs them.
 
-## Views (0.3.0)
+## Tabs (0.4.0)
 
-- **All tasks** (opens on startup): every task in the vault on one screen, grouped by project, with status and priority you can change in place, a filter box and a show-done toggle. Clicking a task opens dotpm's task editor.
-- **Board**: by week (cards in the week they're due, queue order, committed vs available hours per week; drag or *Move…* shifts start and due by whole weeks) or by status (drag to change status).
-
-- **Capacity**: committed hours per ISO week against available hours from `Capacity.md`, raw and × multipliers; weeks at 85 % or more are flagged. Remaining hours (estimate − logged) are spread evenly from max(start, today) to due; overdue work lands today.
-- **At risk**: a task whose remaining hours × multiplier exceed the hours available between today and its due date.
-- **Queue**: open tasks ranked by priority, then due date, then remaining hours; future starts listed under "Starting later". ✓ marks a task done; *Done today* lists today's finished tasks with Undo and clears at midnight; *Find more tasks* suggests ready tasks (dependencies done) to start now.
-- **Work types**: stacked hours per week by `work-type`, with the available-hours line and a table view.
-- **Multipliers**: one per work-type (default 2.0×), with a change history and trend chart; draws the measured factor (cumulative logged ÷ estimate of done tasks, by completion date) as a dashed line beside it.
-- **Progress from checklist**: progress = ticked share of the `## Done when` checklist, set through dotpm's own store so dotpm's views update at once.
+- **dotpm** (opens on startup): dotpm's own project view — its table, Gantt and Kanban, filters and editor — hosted inside the companion, opened on the top-level project so every sub-project's tasks show without the project menu. When dotpm switches scope it stays in this tab; other dotpm screens (overview, task editor) open in their own tab. If dotpm can't be hosted, an *Open dotpm* button opens it normally.
+- **Board**
+  - *Today* (micro): open tasks that have started, ranked by priority, then due date, then remaining hours. ✓ marks done; *Done today* keeps Undo until midnight; *Find more tasks* suggests ready tasks (dependencies done) and *Start now* pulls one in, with *Undo add*.
+  - *By week* (macro): a column per week; each card sits in the week it's due, in queue order, with committed vs available hours on the column. Drag or *Move…* shifts start and due by whole weeks.
+- **Capacity**: committed hours per ISO week against `Capacity.md`, raw and × multipliers; weeks at 85 % or more flagged; at-risk tasks listed. Remaining hours are spread evenly from max(start, today) to due; overdue work lands today.
+- **Work types**: stacked hours per week by `work-type`, with the available-hours line and a table.
+- **Multipliers**: one per work-type (default 2.0×), change history and trend chart, with the measured factor (cumulative logged ÷ estimate of done tasks, by completion date) as a dashed line beside it.
+- **Progress from checklist**: progress = ticked share of the `## Done when` checklist.
 
 ## How it writes
 

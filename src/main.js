@@ -17,9 +17,11 @@ const DEFAULTS = {
   progressFromChecklist: true,
   multipliers: {},
   multiplierHistory: [],
-  lastTab: "tasks",
+  lastTab: "dotpm",
+  dotpmScope: "",
+  dotpmState: null,
   showDone: false,
-  boardMode: "week",
+  boardMode: "today",
   undo: {},
   pulled: {},
   openOnStartup: true,
@@ -27,35 +29,89 @@ const DEFAULTS = {
 };
 
 class CompanionView extends ItemView {
-  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; }
-  boardMode() { return this.plugin.settings.boardMode === "status" ? "status" : "week"; }
+  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = ({ tasks: "dotpm", queue: "board" })[plugin.settings.lastTab] || plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "dotpm Companion"; }
   getIcon() { return "gauge"; }
   async onOpen() { this.refresh(); }
-  onResize() { this.refresh(); }
+  onResize() {
+    if (this.tab === "dotpm") { try { this.dotpmView && this.dotpmView.onResize && this.dotpmView.onResize(); } catch (e) { /* ignore */ } return; }
+    this.refresh();
+  }
+  async onClose() { this.unmountDotpm(); }
+
+  // ---- dotpm's own project view, hosted inside this tab ----
+  // dotpm's view is created through its registered factory with a stand-in leaf: when dotpm wants to
+  // reload "its" tab (switching scope), the change is applied to the hosted view instead of replacing
+  // this companion tab; anything else dotpm opens (task editor, overview) goes to a normal new tab.
+  mountDotpm(host) {
+    const p = this.plugin;
+    if (this.dotpmView) { host.append(this.dotpmView.containerEl); this.scope = this.dotpmView.scope || this.scope; return; }
+    const factory = this.app.viewRegistry && this.app.viewRegistry.viewByType && this.app.viewRegistry.viewByType["pm-project"];
+    if (typeof factory !== "function") throw new Error("dotpm's project view isn't registered (is dotpm enabled?)");
+    const self = this;
+    const leaf = Object.create(this.leaf);
+    leaf.setViewState = async (vs, eState) => {
+      if (vs && vs.type === "pm-project" && self.dotpmView) { await self.dotpmView.setState(vs.state || {}, { history: false }); self.saveDotpmState(); return; }
+      const other = self.app.workspace.getLeaf("tab"); await other.setViewState(vs, eState);
+    };
+    leaf.getViewState = () => ({ type: "pm-project", state: self.dotpmView ? self.dotpmView.getState() : {} });
+    const v = factory(leaf);
+    this.dotpmView = v;
+    v.containerEl.addClass("dpc-embedded");
+    v.containerEl.setAttribute("data-type", "pm-project");
+    host.append(v.containerEl);
+    v.load();
+    const state = p.settings.dotpmState && p.settings.dotpmState.scope ? p.settings.dotpmState : { scope: { kind: "project", path: p.rootProjectPath() } };
+    this.dotpmReady = (async () => {
+      await v.setState(state, { history: false });
+      await v.onOpen();
+      this.scope = v.scope || this.scope;
+    })();
+    this.dotpmReady.catch(e => { console.error("[dotpm-companion] dotpm view failed", e); this.unmountDotpm(); this.dotpmError = e; this.refresh(); });
+  }
+  saveDotpmState() {
+    try { const st = this.dotpmView.getState(); if (st && st.scope) { this.plugin.settings.dotpmState = { scope: st.scope }; this.plugin.saveSettings(); } } catch (e) { /* ignore */ }
+  }
+  unmountDotpm() {
+    const v = this.dotpmView;
+    if (!v) return;
+    this.saveDotpmState();
+    this.dotpmView = null;
+    try { v.onClose && v.onClose(); } catch (e) { /* ignore */ }
+    try { v.unload(); } catch (e) { /* ignore */ }
+    v.containerEl.remove();
+  }
+  switchTab(t) {
+    if (this.tab === "dotpm" && t !== "dotpm") { this.saveDotpmState(); this.scope = null; }
+    this.tab = t; this.plugin.settings.lastTab = t; this.plugin.saveSettings();
+    this.dotpmError = null;
+    if (t !== "dotpm" || !this.dotpmView || !this.dotpmView.containerEl.isConnected) this.contentEl.empty();
+    this.refresh();
+  }
   refresh() {
     const p = this.plugin;
     const root = this.contentEl;
+    // dotpm redraws itself; leave it alone while it's showing.
+    if (this.tab === "dotpm" && this.dotpmView && this.dotpmView.containerEl.isConnected) return;
     V.render(root, {
       tab: this.tab, mode: this.mode, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
-      bridged: !!p.dotpm(), showMore: !!this.showMore, projectColors: p.projectColors,
+      bridged: !!p.dotpm(), showMore: !!this.showMore, projectColors: p.projectColors, dotpmError: this.dotpmError ? String(this.dotpmError.message || this.dotpmError) : null,
       cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity }, tasks: p.taskList(), result: p.result,
     }, {
-      setTab: t => { this.tab = t; p.settings.lastTab = t; p.saveSettings(); this.refresh(); },
+      setTab: t => this.switchTab(t),
+      mountDotpm: host => this.mountDotpm(host),
+      openDotpmTab: () => p.openDotpmInTab(),
       setMode: m => { this.mode = m; p.settings.lastMode = m; p.saveSettings(); this.refresh(); },
       toggleWeek: w => { this.expanded = this.expanded === w ? null : w; this.refresh(); },
       openTask: path => p.openTask(path),
       openFile: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
       markDone: path => p.markDone(path),
       setField: (path, field, value) => p.setTaskField(path, field, value),
-      setShowDone: v => { p.settings.showDone = v; p.saveSettings(); this.refresh(); },
-      toggleGroup: g => { if (this.collapsed.has(g)) this.collapsed.delete(g); else this.collapsed.add(g); this.refresh(); },
-      setQuery: q => { this.query = q; },
       undoDone: path => p.undoDone(path),
       startNow: path => p.startNow(path),
       undoStart: path => p.undoStart(path),
-      moveCard: (path, key) => p.moveCard(path, key, this.boardMode()),
+      moveCard: (path, key) => p.moveCard(path, key),
       setBoardMode: m => { p.settings.boardMode = m; p.saveSettings(); this.refresh(); },
       toggleMore: () => { this.showMore = !this.showMore; this.refresh(); },
       setMultiplier: (k, v) => p.setMultiplier(k, v),
@@ -64,10 +120,11 @@ class CompanionView extends ItemView {
   }
 }
 
-module.exports = class DotpmCompanion extends Plugin {
+const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   async onload() {
     this.tasks = new Map();
     this.projectColors = {};
+    this.projectNotes = {};
     this.capacity = {};
     this.result = null;
     this.pendingProgress = new Map();
@@ -77,7 +134,8 @@ module.exports = class DotpmCompanion extends Plugin {
     this.registerView(VIEW_TYPE, leaf => new CompanionView(leaf, this));
     this.addRibbonIcon("gauge", "dotpm Companion", () => this.activateView());
     this.addCommand({ id: "open", name: "Open view", callback: () => this.activateView() });
-    this.addCommand({ id: "open-tasks", name: "Open all tasks", callback: () => this.activateView("tasks") });
+    this.addCommand({ id: "open-dotpm", name: "Open dotpm tab", callback: () => this.activateView("dotpm") });
+    this.addCommand({ id: "open-today", name: "Open today's queue", callback: () => { this.settings.boardMode = "today"; this.activateView("board"); } });
     this.addCommand({ id: "create-capacity", name: "Create capacity file", callback: () => this.createCapacityFile() });
     this.addCommand({ id: "sync-progress", name: "Update progress from Done-when checklists (all tasks)", callback: () => this.syncAllProgress() });
     this.addSettingTab(new CompanionSettings(this.app, this));
@@ -95,7 +153,7 @@ module.exports = class DotpmCompanion extends Plugin {
       this.registerInterval(window.setInterval(() => {
         if (this.result && this.result.today !== M.localToday()) { this.settings.undo = {}; this.settings.pulled = {}; this.saveSettings(); this.recompute(); }
       }, 60 * 1000));
-      if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("tasks");
+      if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("dotpm");
     });
   }
   onunload() { for (const t of this.pendingProgress.values()) clearTimeout(t); }
@@ -125,7 +183,10 @@ module.exports = class DotpmCompanion extends Plugin {
   async indexFile(file, content) {
     if (!(file instanceof TFile) || !this.inProjects(file.path)) return null;
     const fm = (this.app.metadataCache.getFileCache(file) || {}).frontmatter;
-    if (fm && fm["pm-project"] === true && typeof fm.title === "string") this.projectColors[fm.title] = typeof fm.color === "string" ? fm.color : null;
+    if (fm && fm["pm-project"] === true && typeof fm.title === "string") {
+      this.projectColors[fm.title] = typeof fm.color === "string" ? fm.color : null;
+      this.projectNotes[file.path] = { title: fm.title, parent: typeof fm.parent === "string" && fm.parent ? fm.parent : null };
+    }
     if (!fm || fm["pm-task"] !== true) { this.tasks.delete(file.path); return null; }
     const text = content != null ? content : await this.app.vault.cachedRead(file);
     const t = M.parseTask(file.path, fm, M.bodyOf(text), this.cfg);
@@ -261,11 +322,10 @@ module.exports = class DotpmCompanion extends Plugin {
     const el = n.noticeEl || n.messageEl;
     if (el) el.append(btn);
   }
-  // Board drop: a week column shifts start and due by whole weeks; a status column sets the status.
-  async moveCard(path, key, mode) {
+  // Board drop: a week column shifts start and due by whole weeks.
+  async moveCard(path, key) {
     const t = this.tasks.get(path);
     if (!t) return;
-    if (mode === "status") { if (key !== t.status && this.cfg.statuses.some(x => x.id === key)) await this.updateTask(path, { status: key }); return; }
     const w = this.result && this.result.weeks.find(x => x.week === key);
     if (!w) return;
     const patch = M.shiftToWeek(t, w.start);
@@ -300,11 +360,22 @@ module.exports = class DotpmCompanion extends Plugin {
     await this.loadCapacity(); this.recompute();
     this.app.workspace.getLeaf(true).openFile(f);
   }
+  // Top-level project for the dotpm tab: the one chosen in settings, else the first project with no parent.
+  rootProjectPath() {
+    const notes = this.projectNotes;
+    if (this.settings.dotpmScope && notes[this.settings.dotpmScope]) return this.settings.dotpmScope;
+    const roots = Object.keys(notes).filter(k => !notes[k].parent).sort();
+    return roots[0] || Object.keys(notes).sort()[0] || "";
+  }
+  async openDotpmInTab() {
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.setViewState({ type: "pm-project", active: true, state: { scope: { kind: "project", path: this.rootProjectPath() } } });
+  }
   async activateView(tab) {
     if (tab) this.settings.lastTab = tab;
     let leaf = this.app.workspace.getLeavesOfType(VIEW_TYPE)[0];
     if (!leaf) { leaf = this.app.workspace.getLeaf("tab"); await leaf.setViewState({ type: VIEW_TYPE, active: true }); }
-    else if (tab && leaf.view instanceof CompanionView) { leaf.view.tab = tab; leaf.view.refresh(); }
+    else if (tab && leaf.view instanceof CompanionView) leaf.view.switchTab(tab);
     this.app.workspace.revealLeaf(leaf);
   }
 };
@@ -327,7 +398,13 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setValue(String(S.overloadPct)).onChange(async v => { const n = parseFloat(v); if (n > 0) { S.overloadPct = n; await save(); } }));
     new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks.")
       .addToggle(t => t.setValue(S.progressFromChecklist).onChange(async v => { S.progressFromChecklist = v; await save(); }));
-    new Setting(el).setName("Open on startup").setDesc("Open the companion on the All tasks tab when Obsidian starts.")
+    new Setting(el).setName("dotpm tab project").setDesc("Project the dotpm tab opens on. Its sub-projects are included.")
+      .addDropdown(d => {
+        d.addOption("", "Top-level project (automatic)");
+        for (const k of Object.keys(p.projectNotes).sort()) d.addOption(k, p.projectNotes[k].title + (p.projectNotes[k].parent ? "" : " (top level)"));
+        d.setValue(S.dotpmScope || "").onChange(async v => { S.dotpmScope = v; S.dotpmState = null; await p.saveSettings(); });
+      });
+    new Setting(el).setName("Open on startup").setDesc("Open the companion on the dotpm tab when Obsidian starts.")
       .addToggle(t => t.setValue(S.openOnStartup).onChange(async v => { S.openOnStartup = v; await p.saveSettings(); }));
     new Setting(el).setName("Multipliers").setHeading();
     for (const k of V.typeKeys(p.cfg)) {
@@ -337,3 +414,4 @@ class CompanionSettings extends PluginSettingTab {
     }
   }
 }
+module.exports.CompanionView = CompanionView;
