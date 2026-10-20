@@ -134,7 +134,7 @@ and unaccepted invites. Keep the assumptions in the note above the table.
 | Quick-add default project | Misc | |
 | Templates folder | `Templates/Projects` | |
 | Schedule log | on | Writes `Schedule log.md` and Monday `Spillover.md`. |
-| Write the logs from this device | first desktop | Only one device writes logs so Sync doesn't double them. |
+| Write the logs from this device | first desktop | A switch on each device (stored locally). Turn it on only on your main computer; turning it on takes over from other devices. |
 | Open on startup | on | |
 | Multipliers | 2.0× each | Every change is kept in the history. |
 

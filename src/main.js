@@ -498,13 +498,23 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     if (!id) { id = newId(); try { this.app.saveLocalStorage ? this.app.saveLocalStorage("dpc-device-id", id) : window.localStorage.setItem("dpc-device-id", id); } catch (e) { /* ignore */ } }
     return id;
   }
-  isLogDevice() { return !!this.settings.logDeviceId && this.settings.logDeviceId === this.deviceId(); }
+  // Per-device choice (kept in this device's local storage, not synced): "yes", "no" or unset.
+  localLogChoice() { try { return (this.app.loadLocalStorage ? this.app.loadLocalStorage("dpc-log-here") : window.localStorage.getItem("dpc-log-here")) || null; } catch (e) { return null; } }
+  setLocalLogChoice(v) { try { this.app.saveLocalStorage ? this.app.saveLocalStorage("dpc-log-here", v) : window.localStorage.setItem("dpc-log-here", v); } catch (e) { /* ignore */ } }
+  // This device logs only while it holds the synced claim. A local "no" always wins.
+  isLogDevice() { return this.localLogChoice() !== "no" && !!this.settings.logDeviceId && this.settings.logDeviceId === this.deviceId(); }
+  async setLogHere(on) {
+    this.setLocalLogChoice(on ? "yes" : "no");
+    if (on) this.settings.logDeviceId = this.deviceId();          // other devices see the claim and stop
+    else if (this.settings.logDeviceId === this.deviceId()) this.settings.logDeviceId = "";
+    await this.saveSettings();
+  }
   // Only one device writes the logs. A device claims it automatically only if nobody has yet: no device id in
   // the (synced) settings and no log file already in the vault, which would mean another device is logging.
   claimLogDevice(force) {
     const taken = this.settings.logDeviceId || this.app.vault.getAbstractFileByPath(normalizePath(this.settings.scheduleLogFile))
       || this.app.vault.getAbstractFileByPath(normalizePath(this.settings.spilloverFile));
-    if (force || (!taken && Platform && Platform.isDesktopApp)) { this.settings.logDeviceId = this.deviceId(); this.saveSettings(); }
+    if (force || (!taken && this.localLogChoice() !== "no" && Platform && Platform.isDesktopApp)) { this.settings.logDeviceId = this.deviceId(); this.saveSettings(); }
   }
   noteReason(path, why) { this.reasons.set(path, { why, at: Date.now() }); }
   trackDates(t) {
@@ -654,8 +664,10 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setValue(S.templatesFolder).onChange(async v => { S.templatesFolder = v.trim() || DEFAULTS.templatesFolder; await p.saveSettings(); }));
     new Setting(el).setName("Schedule log").setDesc(`Record every start/due change in “${S.scheduleLogFile}”, and last week's unfinished tasks in “${S.spilloverFile}” each Monday.`)
       .addToggle(t => t.setValue(S.scheduleLog).onChange(async v => { S.scheduleLog = v; await p.saveSettings(); }));
-    new Setting(el).setName("Write the logs from this device").setDesc(p.isLogDevice() ? "This device writes the logs." : "Another device writes the logs (only one should, so Sync doesn't double them).")
-      .addButton(b => b.setButtonText(p.isLogDevice() ? "This device" : "Use this device").setDisabled(p.isLogDevice()).onClick(() => { p.claimLogDevice(true); this.display(); }));
+    new Setting(el).setName("Write the logs from this device")
+      .setDesc(p.isLogDevice() ? "On: this device writes the logs. Turn it on in one place only (your main computer), so Sync doesn't double them."
+        : p.settings.logDeviceId ? "Off: another device writes the logs." : "Off: no device writes the logs yet. Turn this on for your main computer.")
+      .addToggle(t => t.setValue(p.isLogDevice()).onChange(async v => { await p.setLogHere(v); this.display(); }));
     new Setting(el).setName("Open on startup").setDesc("Open the companion on the dotpm tab when Obsidian starts.")
       .addToggle(t => t.setValue(S.openOnStartup).onChange(async v => { S.openOnStartup = v; await p.saveSettings(); }));
     new Setting(el).setName("Multipliers").setHeading();

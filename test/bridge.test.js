@@ -251,3 +251,18 @@ test("a device doesn't claim logging when another device's log is already in the
   p.claimLogDevice(true);
   assert.equal(p.settings.logDeviceId, "mac");
 });
+
+test("the logging switch: on in one place takes over; off releases it", async () => {
+  const { p } = make(true);
+  const store = {};
+  p.app.loadLocalStorage = k => store[k] || null; p.app.saveLocalStorage = (k, v) => { store[k] = v; };
+  p.deviceId = () => "mac";
+  p.settings.logDeviceId = "pc";
+  assert.equal(p.isLogDevice(), false);
+  await p.setLogHere(true);
+  assert.equal(p.settings.logDeviceId, "mac"); assert.equal(p.isLogDevice(), true);
+  await p.setLogHere(false);
+  assert.equal(p.settings.logDeviceId, ""); assert.equal(p.isLogDevice(), false);
+  p.settings.logDeviceId = "mac"; // a stale synced claim
+  assert.equal(p.isLogDevice(), false, "a local off always wins");
+});

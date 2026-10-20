@@ -1,7 +1,7 @@
 {
   "id": "dotpm-companion",
   "name": "dotpm Companion",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "minAppVersion": "1.13.0",
   "description": "Cross-project capacity, priority queue, work-type hours, multipliers and checklist progress for dotpm vaults.",
   "author": "Luke",
