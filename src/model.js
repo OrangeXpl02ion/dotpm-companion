@@ -99,8 +99,19 @@ function parseTask(path, fm, body, cfg) {
     workType: typeof wt === "string" && wt ? wt : null,
     progress: typeof fm.progress === "number" ? fm.progress : 0,
     checklist: parseChecklist(body),
+    completed: normDate(fm.completed),
+    deps: Array.isArray(fm.dependencies) ? fm.dependencies.map(linkTarget).filter(Boolean) : [],
   };
 }
+// "[[kettle-3d-print|Kettle 3D print]]" -> "kettle-3d-print" (the note's file name)
+function linkTarget(v) {
+  if (typeof v !== "string") return null;
+  const m = v.match(/^\[\[([^\]|]+)(?:\|[^\]]*)?\]\]$/);
+  return (m ? m[1] : v).split("/").pop().replace(/\.md$/, "") || null;
+}
+function baseName(path) { return path.split("/").pop().replace(/\.md$/, ""); }
+// A task is ready when every dependency that exists in the vault is complete.
+function isReady(t, byName, cfg) { return (t.deps || []).every(d => { const x = byName.get(d); return !x || isComplete(cfg, x.status); }); }
 
 // ---------- multipliers ----------
 function typeKey(t) { return t.workType || NO_TYPE; }
@@ -145,6 +156,29 @@ function measured(tasks, cfg) {
   }
   const out = {};
   for (const k in acc) out[k] = { factor: acc[k].logged / acc[k].estimate, n: acc[k].n };
+  return out;
+}
+
+// Measured factor over time: cumulative logged ÷ estimate over tasks done by each completion date.
+function measuredSeries(tasks, cfg) {
+  const by = {};
+  for (const t of tasks) {
+    if (!isComplete(cfg, t.status) || !(t.estimate > 0) || !(t.logged > 0)) continue;
+    const date = t.completed || t.logs.map(l => l.date).filter(Boolean).sort().pop();
+    if (!date) continue;
+    (by[typeKey(t)] = by[typeKey(t)] || []).push({ date, logged: t.logged, estimate: t.estimate });
+  }
+  const out = {};
+  for (const k in by) {
+    let L = 0, E = 0, n = 0;
+    const pts = [];
+    for (const x of by[k].sort((a, b) => a.date.localeCompare(b.date))) {
+      L += x.logged; E += x.estimate; n++;
+      if (pts.length && pts[pts.length - 1].date === x.date) pts.pop();
+      pts.push({ date: x.date, value: L / E, n });
+    }
+    out[k] = pts;
+  }
   return out;
 }
 
@@ -254,7 +288,42 @@ function compute(tasks, cfg, settings, today) {
       adjusted(b, mults) - adjusted(a, mults) ||
       a.title.localeCompare(b.title));
   const upcoming = open.filter(t => t.start && t.start > today).length;
-  return { today, weeks, risk, queue, upcoming, unscheduled, beyond, measured: measured(tasks, cfg) };
+  const byName = new Map(tasks.map(t => [baseName(t.path), t]));
+  const ready = t => isReady(t, byName, cfg);
+  // Next tasks you could pull forward: not started yet, dependencies done, best priority first.
+  const candidates = open.filter(t => t.start && t.start > today && ready(t))
+    .sort((a, b) => priorityRank(cfg, a.priority) - priorityRank(cfg, b.priority) || a.start.localeCompare(b.start) || (a.due || "9999").localeCompare(b.due || "9999"));
+  const doneToday = tasks.filter(t => isComplete(cfg, t.status) && t.completed === today).sort((a, b) => a.title.localeCompare(b.title));
+  const blocked = new Set(open.filter(t => !ready(t)).map(t => t.path));
+  return { today, weeks, risk, queue, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
+    candidates, doneToday, blocked, board: board(open, cfg, settings, weeks, today) };
+}
+
+// Board columns. By week: the week a task is due (overdue, this week onward, later, no due date).
+function board(open, cfg, settings, weeks, today) {
+  const mults = settings.multipliers || {};
+  const order = (a, b) => priorityRank(cfg, a.priority) - priorityRank(cfg, b.priority) || (a.due || "9999").localeCompare(b.due || "9999") || adjusted(b, mults) - adjusted(a, mults) || a.title.localeCompare(b.title);
+  const live = weeks.filter(w => !w.isPast);
+  const cols = [{ key: "overdue", label: "Overdue", tasks: [] },
+    ...live.map(w => ({ key: w.week, label: w.isCurrent ? "This week" : w.week.slice(5), week: w, tasks: [] })),
+    { key: "later", label: "Later", tasks: [] }, { key: "none", label: "No due date", tasks: [] }];
+  const byKey = Object.fromEntries(cols.map(c => [c.key, c]));
+  const last = live.length ? live[live.length - 1].end : today;
+  for (const t of open) {
+    const k = !t.due ? "none" : t.due < today ? "overdue" : t.due > last ? "later" : isoWeek(t.due);
+    (byKey[k] || byKey.later).tasks.push(t);
+  }
+  for (const c of cols) c.tasks.sort(order);
+  return cols.filter(c => c.tasks.length || c.week);
+}
+// New start/due when a task is moved to another week: shift both by whole weeks; no due date -> Friday of that week.
+function shiftToWeek(t, weekStart) {
+  if (!t.due) return { due: addDays(weekStart, 4) };
+  const shift = diffDays(mondayOf(t.due), weekStart);
+  if (!shift) return null;
+  const out = { due: addDays(t.due, shift) };
+  if (t.start) out.start = addDays(t.start, shift);
+  return out;
 }
 
 // ---------- file text ----------
@@ -284,4 +353,5 @@ module.exports = {
   linkText, parseChecklist, checklistProgress, parseTask,
   typeKey, multiplierFor, remaining, adjusted, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute,
+  linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek,
 };

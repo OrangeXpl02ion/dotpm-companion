@@ -44,7 +44,7 @@ function typeColor(cfg, k) {
 }
 
 // ---------- shell ----------
-const TABS = [["tasks", "All tasks"], ["capacity", "Capacity"], ["queue", "Queue"], ["types", "Work types"], ["multipliers", "Multipliers"]];
+const TABS = [["tasks", "All tasks"], ["board", "Board"], ["queue", "Queue"], ["capacity", "Capacity"], ["types", "Work types"], ["multipliers", "Multipliers"]];
 function render(root, st, on) {
   const doc = root.ownerDocument;
   root.replaceChildren();
@@ -61,7 +61,7 @@ function render(root, st, on) {
   if (!st.result) { root.append(h(doc, "p", { class: "dpc-muted" }, "Reading tasks…")); return; }
   const body = h(doc, "div", { class: "dpc-body" });
   root.append(body);
-  ({ tasks: renderTasks, capacity: renderCapacity, queue: renderQueue, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderTasks)(body, st, on);
+  ({ tasks: renderTasks, board: renderBoard, capacity: renderCapacity, queue: renderQueue, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderTasks)(body, st, on);
 }
 
 function taskLink(doc, t, on) {
@@ -223,7 +223,13 @@ function tile(doc, title, value, sub) {
 // ---------- queue ----------
 function renderQueue(body, st, on) {
   const doc = body.ownerDocument, R = st.result, mults = st.settings.multipliers;
-  if (!R.queue.length) { body.append(h(doc, "p", { class: "dpc-muted" }, "No open tasks.")); return; }
+  if (!R.queue.length) {
+    body.append(h(doc, "div", { class: "dpc-empty" }, h(doc, "strong", {}, "Queue is clear."), " ",
+      R.candidates.length ? "Pull in the next tasks below." : "Nothing else is ready to start yet."));
+    renderMore(body, st, on, true);
+    renderDoneToday(body, st, on);
+    return;
+  }
   const tb = h(doc, "tbody");
   R.queue.forEach((t, i) => {
     const hrs = st.mode === "raw" ? M.remaining(t) : M.adjusted(t, mults);
@@ -239,12 +245,103 @@ function renderQueue(body, st, on) {
   });
   body.append(h(doc, "table", { class: "dpc-table dpc-queue" },
     h(doc, "thead", {}, h(doc, "tr", {}, ["#", "Priority", "Task", "Due", st.mode === "raw" ? "Left" : "Left ×", "", ""].map((c, i) => h(doc, "th", { class: i === 0 || i === 4 ? "dpc-num" : null }, c)))), tb));
+  renderDoneToday(body, st, on);
+  renderMore(body, st, on, false);
   if (R.upcoming) {
     const later = st.tasks.filter(t => !M.isComplete(st.cfg, t.status) && t.start && t.start > R.today).sort((a, b) => a.start.localeCompare(b.start) || M.priorityRank(st.cfg, a.priority) - M.priorityRank(st.cfg, b.priority));
     body.append(h(doc, "details", { class: "dpc-details" }, h(doc, "summary", {}, `Starting later (${later.length})`),
       h(doc, "ul", { class: "dpc-list" }, later.map(t => h(doc, "li", {}, h(doc, "span", { class: "dpc-muted dpc-nowrap dpc-start" }, `starts ${fmtD(t.start)}`), taskLink(doc, t, on),
         h(doc, "span", { class: "dpc-muted" }, ` · ${t.project}`), riskBadge(doc, R.risk[t.path]))))));
   }
+}
+
+function renderDoneToday(body, st, on) {
+  const doc = body.ownerDocument, R = st.result;
+  body.append(h(doc, "h4", { class: "dpc-h" }, `Done today (${R.doneToday.length})`, h(doc, "span", { class: "dpc-muted dpc-h-note" }, "clears at midnight")));
+  if (!R.doneToday.length) { body.append(h(doc, "p", { class: "dpc-muted" }, "Nothing finished yet today.")); return; }
+  body.append(h(doc, "ul", { class: "dpc-list dpc-done-list" }, R.doneToday.map(t =>
+    h(doc, "li", {}, h(doc, "span", { class: "dpc-done-mark", "aria-hidden": "true" }, "✓"), taskLink(doc, t, on), h(doc, "span", { class: "dpc-muted" }, ` · ${t.project}`),
+      h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.undoDone(t.path), "aria-label": `Undo: reopen ${t.title}` }, "Undo")))));
+}
+function renderMore(body, st, on, open) {
+  const doc = body.ownerDocument, R = st.result;
+  const show = open || st.showMore;
+  const btn = h(doc, "button", { class: (open ? "mod-cta " : "") + "dpc-more-btn", onclick: () => on.toggleMore(), "aria-expanded": show },
+    h(doc, "span", { "aria-hidden": "true" }, "↻ "), show && !open ? "Hide suggestions" : "Find more tasks");
+  body.append(h(doc, "div", { class: "dpc-more" }, open && show ? null : btn));
+  if (!show) return;
+  const list = R.candidates.slice(0, 6);
+  if (!list.length) { body.append(h(doc, "p", { class: "dpc-muted" }, "No task is ready to pull forward: everything left is waiting on another task.")); return; }
+  body.append(h(doc, "p", { class: "dpc-muted dpc-sub" }, "Ready to start: dependencies done, best priority first. “Start now” moves the start date to today."));
+  body.append(h(doc, "ul", { class: "dpc-list dpc-more-list" }, list.map(t =>
+    h(doc, "li", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority)), taskLink(doc, t, on),
+      h(doc, "span", { class: "dpc-muted" }, ` · ${t.project} · starts ${fmtD(t.start)}${t.estimate ? ` · ${fmtH(M.adjusted(t, st.settings.multipliers))}` : ""}`),
+      h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.startNow(t.path) }, "Start now")))));
+}
+
+// ---------- board ----------
+function renderBoard(body, st, on) {
+  const doc = body.ownerDocument, R = st.result, cfg = st.cfg, mults = st.settings.multipliers;
+  const mode = st.settings.boardMode === "status" ? "status" : "week";
+  body.append(h(doc, "div", { class: "dpc-toolbar" },
+    h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board columns" }, [["week", "By week"], ["status", "By status"]].map(([id, name]) =>
+      h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
+    h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Cards sit in the week they're due, in queue order. Drag a card to another week to move its dates." : "Drag a card to change its status.")));
+  const open = st.tasks.filter(t => !M.isComplete(cfg, t.status));
+  let cols;
+  if (mode === "week") cols = R.board;
+  else {
+    const order = R.queue.concat(open.filter(t => !R.queue.includes(t)));
+    cols = cfg.statuses.filter(x => !x.complete || x.id === M.doneStatusId(cfg)).map(x => ({ key: x.id, label: x.label,
+      tasks: x.complete ? R.doneToday : order.filter(t => t.status === x.id), done: !!x.complete }));
+  }
+  const targets = mode === "week" ? R.board.filter(c => c.week).map(c => ({ key: c.key, label: c.week.isCurrent ? "This week" : `${c.key.slice(5)} (${fmtD(c.week.start)})` }))
+    : cfg.statuses.map(x => ({ key: x.id, label: x.label }));
+  const wrap = h(doc, "div", { class: "dpc-board" });
+  for (const c of cols) {
+    const w = c.week;
+    const hrs = c.tasks.reduce((a, t) => a + M.adjusted(t, mults), 0);
+    const head = h(doc, "div", { class: "dpc-col-head" },
+      h(doc, "div", { class: "dpc-col-title" }, h(doc, "strong", {}, c.label), h(doc, "span", { class: "dpc-muted" }, ` ${c.tasks.length}`)),
+      w ? h(doc, "div", { class: "dpc-col-sub" }, h(doc, "span", { class: "dpc-muted" }, `${fmtD(w.start)} – ${fmtD(w.end)}`),
+          h(doc, "div", { class: "dpc-meter dpc-meter-sm" + (w.overloaded ? " is-over" : ""), role: "img", "aria-label": `${Math.round(w.pct * 100)}% committed` },
+            h(doc, "div", { class: "dpc-meter-fill", style: `width:${Math.min(100, w.pct * 100)}%` })),
+          h(doc, "span", { class: "dpc-muted dpc-nowrap", title: "Committed this week (all tasks spread over their dates, × multipliers) of available" }, `${fmtH(w.adj)} / ${fmtH(w.available)}`))
+        : h(doc, "div", { class: "dpc-col-sub dpc-muted" }, c.done ? "finished today" : hrs ? `${fmtH(hrs)} left ×` : ""));
+    const list = h(doc, "div", { class: "dpc-col-list" });
+    for (const t of c.tasks) list.append(card(doc, t, st, on, mode, targets));
+    if (!c.tasks.length) list.append(h(doc, "div", { class: "dpc-col-empty dpc-muted" }, "—"));
+    const col = h(doc, "section", { class: "dpc-col" + (w && w.isCurrent ? " is-current" : "") + (w && w.overloaded ? " is-over" : ""), "aria-label": c.label }, head, list);
+    const droppable = mode === "status" ? cfg.statuses.some(x => x.id === c.key) : !!w;
+    if (droppable) {
+      col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("is-drop"); });
+      col.addEventListener("dragleave", () => col.classList.remove("is-drop"));
+      col.addEventListener("drop", e => { e.preventDefault(); col.classList.remove("is-drop"); const p = e.dataTransfer.getData("text/plain"); if (p) on.moveCard(p, c.key); });
+    }
+    wrap.append(col);
+  }
+  body.append(wrap);
+}
+function card(doc, t, st, on, mode, targets) {
+  const R = st.result, cfg = st.cfg;
+  const done = M.isComplete(cfg, t.status);
+  const el = h(doc, "article", { class: "dpc-card" + (done ? " is-done" : "") + (R.blocked.has(t.path) ? " is-waiting" : ""), draggable: done ? null : "true" });
+  el.addEventListener("dragstart", e => { e.dataTransfer.setData("text/plain", t.path); e.dataTransfer.effectAllowed = "move"; el.classList.add("is-drag"); });
+  el.addEventListener("dragend", () => el.classList.remove("is-drag"));
+  const cur = mode === "status" ? t.status : (t.due ? M.isoWeek(t.due) : "");
+  const move = h(doc, "select", { class: "dropdown dpc-move", "aria-label": `Move ${t.title}` },
+    h(doc, "option", { value: "", selected: true, disabled: true }, "Move…"), targets.filter(x => x.key !== cur).map(x => h(doc, "option", { value: x.key }, x.label)));
+  move.addEventListener("change", () => { if (move.value) on.moveCard(t.path, move.value); });
+  el.append(
+    h(doc, "div", { class: "dpc-card-top" }, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(cfg.priorities, t.priority)),
+      t.workType ? h(doc, "span", { class: "dpc-type dpc-muted" }, h(doc, "span", { class: "dpc-dot", style: `background:${typeColor(cfg, t.workType)}` }), t.workType) : null,
+      riskBadge(doc, R.risk[t.path])),
+    h(doc, "div", { class: "dpc-card-title" }, t.type === "milestone" ? "◆ " : null, taskLink(doc, t, on)),
+    h(doc, "div", { class: "dpc-card-meta dpc-muted" }, [t.project, t.due ? `due ${fmtD(t.due)}` : null, !done && M.remaining(t) > 0 ? `${fmtH(M.adjusted(t, st.settings.multipliers))} ×` : null,
+      R.blocked.has(t.path) ? "waiting on another task" : null].filter(Boolean).join(" · ")),
+    done ? h(doc, "button", { class: "dpc-small", onclick: () => on.undoDone(t.path) }, "Undo") : h(doc, "div", { class: "dpc-card-foot" }, move,
+      h(doc, "button", { class: "dpc-done", title: "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓")));
+  return el;
 }
 
 // ---------- work types (stacked bars per week) ----------
@@ -337,15 +434,16 @@ function renderMultipliers(body, st, on) {
   }
   body.append(h(doc, "table", { class: "dpc-table dpc-mults" }, h(doc, "thead", {}, h(doc, "tr", {}, ["Work type", "Multiplier", "Measured (logged ÷ estimate)"].map(c => h(doc, "th", {}, c)))), tb));
   body.append(h(doc, "h4", { class: "dpc-h" }, "Trend"));
-  body.append(trendChart(doc, body, cfg, set.multiplierHistory || [], keys, R.today));
+  body.append(trendChart(doc, body, cfg, set.multiplierHistory || [], keys, R.today, R.measuredSeries || {}));
 }
-function trendChart(doc, body, cfg, history, keys, today) {
+function trendChart(doc, body, cfg, history, keys, today, measuredSeries) {
   const wrap = h(doc, "div", { class: "dpc-chart-wrap" });
   if (!history.length) { wrap.append(h(doc, "p", { class: "dpc-muted" }, "No history yet.")); return wrap; }
-  const first = history[0].date;
+  const mDates = Object.values(measuredSeries).flat().map(p => p.date);
+  const first = [history[0].date, ...mDates].sort()[0];
   const last = M.diffDays(first, today) < 13 ? M.addDays(first, 13) : today;
   const span = M.diffDays(first, last);
-  const vals = history.map(p => p.value);
+  const vals = history.map(p => p.value).concat(Object.values(measuredSeries).flat().map(p => p.value));
   const yMax = Math.max(2.5, Math.ceil((Math.max(...vals) + 0.25) * 2) / 2), yMin = 0;
   const W = Math.max(320, Math.min(760, body.clientWidth || 640)), H = 220, padL = 36, padR = 120, padT = 10, padB = 26;
   const x = d => padL + (W - padL - padR) * (M.diffDays(first, d) / span);
@@ -377,6 +475,14 @@ function trendChart(doc, body, cfg, history, keys, today) {
     const v = prev;
     (ends[v] = ends[v] || []).push(k);
   }
+  // measured factor from time logs: dashed, same hue, square markers
+  for (const k of keys) {
+    const pts = (measuredSeries[k] || []).filter(p => p.date <= last);
+    if (!pts.length) continue;
+    const d = pts.map((p, i) => `${i ? "L" : "M"}${x(p.date)},${y(p.value)}`).join(" ") + (pts.length === 1 ? ` L${x(pts[0].date) + 0.01},${y(pts[0].value)}` : "");
+    svg.append(s(doc, "path", { d, class: "dpc-line dpc-line-measured", stroke: typeColor(cfg, k) }));
+    for (const p of pts) svg.append(s(doc, "rect", { x: x(p.date) - 4, y: y(p.value) - 4, width: 8, height: 8, rx: 2, fill: typeColor(cfg, k), class: "dpc-pt" }));
+  }
   // direct end labels, grouped when several types share a value
   const labelY = Object.keys(ends).map(Number).sort((a, b) => b - a).map(v => ({ v, y: y(v) }));
   for (let i = 1; i < labelY.length; i++) if (labelY[i].y - labelY[i - 1].y < 14) labelY[i].y = labelY[i - 1].y + 14;
@@ -397,13 +503,20 @@ function trendChart(doc, body, cfg, history, keys, today) {
     cross.setAttribute("x1", x(day)); cross.setAttribute("x2", x(day)); cross.classList.add("is-on");
     tip.replaceChildren(h(doc, "strong", {}, fmtD(day)), ...shown.map(k => {
       const v = M.multiplierOn(history, k, day);
-      return h(doc, "div", {}, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), `${typeName(k)}: ${v == null ? "—" : fmtX(v)}`);
+      const ms = (measuredSeries[k] || []).filter(p => p.date <= day).pop();
+      return h(doc, "div", {}, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), `${typeName(k)}: ${v == null ? "—" : fmtX(v)}`,
+        ms ? h(doc, "span", { class: "dpc-muted" }, ` · measured ${fmtX(ms.value)} (${ms.n})`) : null);
     }));
     tip.classList.add("is-on");
     placeTip(tip, wrap, e.clientX, e.clientY);
   });
   hit.addEventListener("mouseleave", () => { tip.classList.remove("is-on"); cross.classList.remove("is-on"); });
-  wrap.append(legend(doc, cfg, shown, false), svg, tip);
+  const anyMeasured = Object.keys(measuredSeries).length > 0;
+  wrap.append(legend(doc, cfg, shown, false),
+    h(doc, "div", { class: "dpc-legend dpc-legend-key" },
+      h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-key-solid" }), "your multiplier"),
+      h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-key-dash" }), anyMeasured ? "measured from time logs (logged ÷ estimate of done tasks)" : "measured from time logs — appears once a task with logged time is done")),
+    svg, tip);
   const changes = history.slice().reverse();
   wrap.append(h(doc, "details", { class: "dpc-details" }, h(doc, "summary", {}, `Change history (${changes.length})`),
     h(doc, "table", { class: "dpc-table" }, h(doc, "thead", {}, h(doc, "tr", {}, ["Date", "Work type", "Multiplier"].map(c => h(doc, "th", {}, c)))),

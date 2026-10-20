@@ -31,7 +31,8 @@ function make(withDotpm) {
   const p = new Plugin(app);
   p.app = app;
   p.cfg = M.readDotpmConfig({});
-  p.settings = { progressFromChecklist: true };
+  p.settings = { progressFromChecklist: true, undo: {} };
+  p.saveSettings = async () => {};
   const body = M.bodyOf(files["Project/K/_tasks/a.md"]);
   p.tasks = new Map([["Project/K/_tasks/a.md", M.parseTask("Project/K/_tasks/a.md", { "pm-task": true, id: "t1", status: "todo", progress: 0 }, body, p.cfg)]]);
   return { p, calls, files };
@@ -74,4 +75,32 @@ test("open task uses dotpm's editor", () => {
   const { p, calls } = make(true);
   p.openTask("Project/K/_tasks/a.md");
   assert.deepEqual(calls, [["openTask", "Project/K/_tasks/a.md"]]);
+});
+
+test("undo restores the status a task had before it was marked done", async () => {
+  const { p, calls } = make(true);
+  const path = "Project/K/_tasks/a.md";
+  p.tasks.get(path).status = "in-progress";
+  await p.markDone(path);
+  assert.equal(p.settings.undo[path].prev, "in-progress");
+  p.tasks.get(path).status = "done";
+  await p.undoDone(path);
+  assert.deepEqual(calls.filter(c => c[0] === "updateTask").map(c => c[3]), [{ status: "done" }, { status: "in-progress" }]);
+  assert.equal(p.settings.undo[path], undefined);
+});
+
+test("undo of a task finished elsewhere reopens it as in progress", async () => {
+  const { p, calls } = make(true);
+  const path = "Project/K/_tasks/a.md";
+  p.tasks.get(path).status = "done";
+  await p.undoDone(path);
+  assert.deepEqual(calls[0][3], { status: "in-progress" });
+});
+
+test("start now moves the start date to today", async () => {
+  const { p, calls } = make(true);
+  const path = "Project/K/_tasks/a.md";
+  Object.assign(p.tasks.get(path), { start: "2099-01-01", due: "2099-01-05" });
+  await p.startNow(path);
+  assert.deepEqual(calls[0][3], { start: M.localToday() });
 });

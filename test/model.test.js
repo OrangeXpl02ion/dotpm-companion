@@ -153,3 +153,40 @@ test("frontmatter line edits touch only that line", () => {
   assert.equal(M.setFrontmatterLines("no frontmatter", { progress: "1" }), "no frontmatter");
   assert.ok(f);
 });
+
+test("dependencies, ready tasks and candidates", () => {
+  const today = "2026-10-20";
+  const R = M.compute(tasks, cfg, settings, today);
+  const k = tasks.find(t => t.title === "Kettle Framer page");
+  assert.ok(k.deps.includes("kettle-3d-print") && k.deps.includes("Typeface pairing"));
+  assert.ok(R.blocked.has(k.path), "Framer page waits on unfinished tasks");
+  assert.ok(R.candidates.length > 0);
+  for (const c of R.candidates) assert.ok(!R.blocked.has(c.path) && c.start > today);
+  for (let i = 1; i < R.candidates.length; i++) assert.ok(M.priorityRank(cfg, R.candidates[i - 1].priority) <= M.priorityRank(cfg, R.candidates[i].priority));
+});
+
+test("done today and measured series", () => {
+  const base = { estimate: 4, logs: [], workType: "CAD", priority: "high", deps: [], start: null, due: null, title: "a" };
+  const ts = [
+    { ...base, path: "a", status: "done", completed: "2026-10-20", logged: 6 },
+    { ...base, path: "b", status: "done", completed: "2026-10-22", logged: 4, estimate: 8 },
+    { ...base, path: "c", status: "done", completed: "2026-10-19", logged: 0 },
+    { ...base, path: "d", status: "todo", logged: 3 },
+  ];
+  const R = M.compute(ts, cfg, settings, "2026-10-20");
+  assert.deepEqual(R.doneToday.map(t => t.path), ["a"]);
+  const s = R.measuredSeries.CAD;
+  assert.deepEqual(s.map(p => [p.date, Math.round(p.value * 100) / 100, p.n]), [["2026-10-20", 1.5, 1], ["2026-10-22", 0.83, 2]]);
+});
+
+test("board columns and moving between weeks", () => {
+  const R = M.compute(tasks, cfg, settings, "2026-10-20");
+  const keys = R.board.map(c => c.key);
+  assert.equal(keys[0] === "overdue" ? keys[1] : keys[0], "2026-W43");
+  assert.ok(keys.includes("none"));
+  const open = tasks.filter(t => !M.isComplete(cfg, t.status));
+  assert.equal(R.board.reduce((a, c) => a + c.tasks.length, 0), open.length, "every open task on exactly one column");
+  assert.deepEqual(M.shiftToWeek({ start: "2026-11-24", due: "2026-11-27" }, "2026-12-07"), { start: "2026-12-08", due: "2026-12-11" });
+  assert.deepEqual(M.shiftToWeek({ start: null, due: null }, "2026-11-02"), { due: "2026-11-06" });
+  assert.equal(M.shiftToWeek({ due: "2026-11-27" }, "2026-11-23"), null);
+});

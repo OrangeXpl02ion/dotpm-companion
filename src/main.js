@@ -19,12 +19,15 @@ const DEFAULTS = {
   multiplierHistory: [],
   lastTab: "tasks",
   showDone: false,
+  boardMode: "week",
+  undo: {},
   openOnStartup: true,
   lastMode: "adj",
 };
 
 class CompanionView extends ItemView {
   constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; }
+  boardMode() { return this.plugin.settings.boardMode === "status" ? "status" : "week"; }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "dotpm Companion"; }
   getIcon() { return "gauge"; }
@@ -35,7 +38,7 @@ class CompanionView extends ItemView {
     const root = this.contentEl;
     V.render(root, {
       tab: this.tab, mode: this.mode, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
-      bridged: !!p.dotpm(),
+      bridged: !!p.dotpm(), showMore: !!this.showMore,
       cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity }, tasks: p.taskList(), result: p.result,
     }, {
       setTab: t => { this.tab = t; p.settings.lastTab = t; p.saveSettings(); this.refresh(); },
@@ -48,6 +51,11 @@ class CompanionView extends ItemView {
       setShowDone: v => { p.settings.showDone = v; p.saveSettings(); this.refresh(); },
       toggleGroup: g => { if (this.collapsed.has(g)) this.collapsed.delete(g); else this.collapsed.add(g); this.refresh(); },
       setQuery: q => { this.query = q; },
+      undoDone: path => p.undoDone(path),
+      startNow: path => p.startNow(path),
+      moveCard: (path, key) => p.moveCard(path, key, this.boardMode()),
+      setBoardMode: m => { p.settings.boardMode = m; p.saveSettings(); this.refresh(); },
+      toggleMore: () => { this.showMore = !this.showMore; this.refresh(); },
       setMultiplier: (k, v) => p.setMultiplier(k, v),
       createCapacity: () => p.createCapacityFile(),
     });
@@ -81,7 +89,9 @@ module.exports = class DotpmCompanion extends Plugin {
       this.registerEvent(this.app.vault.on("modify", f => {
         if (f.path === normalizePath(this.app.vault.configDir + "/plugins/project-manager/data.json")) this.reloadDotpmConfig().then(() => this.rebuildIndex());
       }));
-      this.registerInterval(window.setInterval(() => { if (this.result && this.result.today !== M.localToday()) this.recompute(); }, 60 * 1000));
+      this.registerInterval(window.setInterval(() => {
+        if (this.result && this.result.today !== M.localToday()) { this.settings.undo = {}; this.saveSettings(); this.recompute(); }
+      }, 60 * 1000));
       if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("tasks");
     });
   }
@@ -92,6 +102,9 @@ module.exports = class DotpmCompanion extends Plugin {
     this.settings = Object.assign({}, DEFAULTS, data);
     this.settings.multipliers = Object.assign({}, data.multipliers || {});
     this.settings.multiplierHistory = Array.isArray(data.multiplierHistory) ? data.multiplierHistory.slice() : [];
+    // Undo entries only live for the day they were made ("Done today" clears at midnight).
+    const today = M.localToday();
+    this.settings.undo = Object.fromEntries(Object.entries(data.undo || {}).filter(([, v]) => v && v.date === today));
   }
   async saveSettings() { await this.saveData(this.settings); }
 
@@ -193,11 +206,49 @@ module.exports = class DotpmCompanion extends Plugin {
   async markDone(path) {
     const t = this.tasks.get(path);
     if (!t) return;
+    this.settings.undo[path] = { prev: t.status, date: M.localToday() };
+    await this.saveSettings();
     await this.updateTask(path, { status: M.doneStatusId(this.cfg) });
     new Notice(`Marked “${t.title}” done.`);
   }
+  // Reopen a task finished today, back to the status it had before (or the first open status).
+  async undoDone(path) {
+    const t = this.tasks.get(path);
+    if (!t) return;
+    const u = this.settings.undo[path];
+    const open = this.cfg.statuses.filter(x => !x.complete);
+    const prev = u && open.some(x => x.id === u.prev) ? u.prev : (open.find(x => x.id === "in-progress") || open[0] || { id: "todo" }).id;
+    delete this.settings.undo[path];
+    await this.saveSettings();
+    await this.updateTask(path, { status: prev });
+    new Notice(`Reopened “${t.title}”.`);
+  }
+  // Pull a not-yet-started task into today.
+  async startNow(path) {
+    const t = this.tasks.get(path);
+    if (!t) return;
+    const today = M.localToday();
+    const patch = { start: today };
+    if (t.due && t.due < today) patch.due = today;
+    await this.updateTask(path, patch);
+    new Notice(`“${t.title}” starts today.`);
+  }
+  // Board drop: a week column shifts start and due by whole weeks; a status column sets the status.
+  async moveCard(path, key, mode) {
+    const t = this.tasks.get(path);
+    if (!t) return;
+    if (mode === "status") { if (key !== t.status && this.cfg.statuses.some(x => x.id === key)) await this.updateTask(path, { status: key }); return; }
+    const w = this.result && this.result.weeks.find(x => x.week === key);
+    if (!w) return;
+    const patch = M.shiftToWeek(t, w.start);
+    if (patch) await this.updateTask(path, patch);
+  }
   async setTaskField(path, field, value) {
     if (!["status", "priority"].includes(field)) return;
+    const t = this.tasks.get(path);
+    if (field === "status" && t && !M.isComplete(this.cfg, t.status) && M.isComplete(this.cfg, value)) {
+      this.settings.undo[path] = { prev: t.status, date: M.localToday() }; await this.saveSettings();
+    }
     await this.updateTask(path, { [field]: value });
   }
   // Open in dotpm's task editor when available, otherwise the note itself.

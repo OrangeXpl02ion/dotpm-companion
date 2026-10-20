@@ -26,9 +26,11 @@ window.setup=(o)=>{
   const S=JSON.parse(JSON.stringify(settings)); Object.assign(S,o.settings||{});
   for(const [d,k,v] of (o.changes||[])){S.multipliers[k]=v;S.multiplierHistory=M.recordMultiplier(S.multiplierHistory,d,k,v);}
   const today=o.today||"2026-10-20";
-  S.projectsFolder="Project/";const st={tab:o.tab,mode:o.mode||"adj",expanded:o.expanded||null,collapsed:new Set(o.collapsed||[]),query:o.query||"",bridged:true,cfg,settings:S,tasks,result:M.compute(tasks,cfg,S,today)};
+  const TS=tasks.map(t=>({...t}));
+  for(const [title,f] of (o.mutate||[])){const t=TS.find(x=>x.title===title); if(t)Object.assign(t,f);}
+  S.projectsFolder="Project/";const tasks2=TS;const st={tab:o.tab,mode:o.mode||"adj",expanded:o.expanded||null,collapsed:new Set(o.collapsed||[]),query:o.query||"",bridged:true,cfg,settings:S,tasks:tasks2,result:M.compute(tasks2,cfg,S,today),showMore:!!o.showMore};
   const root=document.getElementById("root");
-  const on={setTab(){},setMode(){},toggleWeek(){},openTask(){},openFile(){},markDone(){},setField(){},setShowDone(){},toggleGroup(){},setQuery(){},setMultiplier(){},createCapacity(){}};
+  const on={undoDone(){},startNow(){},moveCard(){},setBoardMode(){},toggleMore(){},setTab(){},setMode(){},toggleWeek(){},openTask(){},openFile(){},markDone(){},setField(){},setShowDone(){},toggleGroup(){},setQuery(){},setMultiplier(){},createCapacity(){}};
   V.render(root,st,on);
   return {errors:window.__errs||[]};
 };
