@@ -124,8 +124,13 @@ function isReady(t, byName, cfg) { return (t.deps || []).every(d => { const x = 
 // ---------- multipliers ----------
 function typeKey(t) { return t.workType || NO_TYPE; }
 function multiplierFor(mults, key) { const v = mults && mults[key]; return typeof v === "number" && v > 0 ? v : DEFAULT_MULTIPLIER; }
+// Raw hours left: estimate − logged (no multiplier).
 function remaining(t) { return Math.max(0, (t.estimate || 0) - t.logged); }
-function adjusted(t, mults) { return remaining(t) * multiplierFor(mults, typeKey(t)); }
+// Real hours left: the multiplier turns the estimate into real hours; logged hours are already real,
+// so they come off after multiplying (estimate × multiplier − logged), never before.
+function adjusted(t, mults) { return Math.max(0, (t.estimate || 0) * multiplierFor(mults, typeKey(t)) - t.logged); }
+// Logged time has reached estimate × multiplier but the task isn't done: the estimate needs revising.
+function overBudget(t, mults) { return t.estimate > 0 && t.logged > 0 && t.logged >= t.estimate * multiplierFor(mults, typeKey(t)); }
 
 // Append a history point; one point per type per day (a same-day change replaces it).
 function recordMultiplier(history, date, key, value) {
@@ -286,15 +291,15 @@ function compute(tasks, cfg, settings, today) {
   const unscheduled = [], beyond = [];
   for (const t of open) {
     const raw = remaining(t), adj = adjusted(t, mults);
-    if (raw <= 0) continue;
-    const s = spread(t, raw, today);
+    if (raw <= 0 && adj <= 0) continue;
+    const s = spread(t, 1, today); // shares of the task per day (sum to 1)
     if (!s) { unscheduled.push(t); continue; }
     const k = typeKey(t), pk = t.project || NO_PROJECT;
     const per = {};
-    for (const [d, h] of s) {
+    for (const [d, f] of s) {
       const w = byWeek[isoWeek(d)];
       if (!w) { if (!beyond.includes(t)) beyond.push(t); continue; }
-      const a = h * (adj / raw);
+      const h = raw * f, a = adj * f;
       w.raw += h; w.adj += a;
       w.byType[k] = (w.byType[k] || 0) + a;
       w.rawByType[k] = (w.rawByType[k] || 0) + h;
@@ -323,16 +328,14 @@ function compute(tasks, cfg, settings, today) {
     if (!overdue) for (let d = today; d <= t.due; d = addDays(d, 1)) avail += availableOnDay(cap, d, fallback);
     if (overdue || adj > avail) risk[t.path] = { overdue, need: adj, available: avail, days: overdue ? 0 : diffDays(today, t.due) + 1 };
   }
-  // Priority queue: open, not starting in the future; priority, then due, then remaining hours (largest first).
+  const byName = new Map(tasks.map(t => [baseName(t.path), t]));
+  const urg = urgency(open, byName, cfg, settings, today);
+  // Queue: open, not starting in the future; urgency tier (now, tight, normal), then priority, then due,
+  // then hours left (largest first).
   const queue = open
     .filter(t => !(t.start && t.start > today))
-    .sort((a, b) =>
-      priorityRank(cfg, a.priority) - priorityRank(cfg, b.priority) ||
-      (a.due || "9999") .localeCompare(b.due || "9999") ||
-      adjusted(b, mults) - adjusted(a, mults) ||
-      a.title.localeCompare(b.title));
+    .sort((a, b) => urgencyOrder(cfg, mults, urg)(a, b));
   const upcoming = open.filter(t => t.start && t.start > today).length;
-  const byName = new Map(tasks.map(t => [baseName(t.path), t]));
   const ready = t => isReady(t, byName, cfg);
   // Next tasks you could pull forward: not started yet, dependencies done, best priority first.
   const candidates = open.filter(t => t.start && t.start > today && ready(t))
@@ -350,19 +353,64 @@ function compute(tasks, cfg, settings, today) {
   for (let i = 0; i < 7; i++) days.push({ date: addDays(today, i), adj: 0, available: availableOnDay(cap, addDays(today, i), fallback) });
   const dayIdx = Object.fromEntries(days.map((d, i) => [d.date, i]));
   for (const t of open) {
-    const raw = remaining(t); if (raw <= 0) continue;
-    const s = spread(t, raw, today); if (!s) continue;
-    const f = adjusted(t, mults) / raw;
-    for (const [d, hh] of s) if (d in dayIdx) days[dayIdx[d]].adj += hh * f;
+    const adj = adjusted(t, mults); if (adj <= 0) continue;
+    const s = spread(t, adj, today); if (!s) continue;
+    for (const [d, hh] of s) if (d in dayIdx) days[dayIdx[d]].adj += hh;
   }
-  return { today, weeks, risk, queue, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
-    candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today) };
+  const over = new Set(open.filter(t => overBudget(t, mults)).map(t => t.path));
+  return { today, weeks, risk, queue, urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
+    candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg) };
 }
 
+// ---------- urgency ----------
+// Tiers: 0 now (overdue, due today/tomorrow, or not enough hours before the due date),
+// 1 tight (needs at least tightPct % of the hours available before the due date), 2 normal.
+// Slack = hours available from today to the due date − real hours left. A task also takes the tier of
+// any open task that waits on it (directly or further down the chain), when that is more urgent.
+const TIERS = ["now", "tight", "normal"];
+function urgency(open, byName, cfg, settings, today) {
+  const mults = settings.multipliers || {}, cap = settings.capacity || {}, fallback = settings.defaultWeeklyHours;
+  const tight = (settings.tightPct || 50) / 100;
+  const out = {};
+  for (const t of open) {
+    const need = adjusted(t, mults);
+    if (!t.due) { out[t.path] = { tier: 2, need, slack: null, reason: "No due date" }; continue; }
+    let avail = 0;
+    for (let d = today; d <= t.due; d = addDays(d, 1)) avail += availableOnDay(cap, d, fallback);
+    const slack = avail - need, days = diffDays(today, t.due);
+    let tier = 2, reason = `${fmtHours(slack)} slack`;
+    if (days < 0) { tier = 0; reason = "Overdue"; }
+    else if (days === 0) { tier = 0; reason = "Due today"; }
+    else if (days === 1) { tier = 0; reason = "Due tomorrow"; }
+    else if (need > 0 && slack < 0) { tier = 0; reason = `Short ${fmtHours(-slack)}`; }
+    else if (need > 0 && avail > 0 && need >= tight * avail) { tier = 1; reason = `${fmtHours(slack)} slack`; }
+    out[t.path] = { tier, need, slack, reason, own: tier };
+  }
+  // Inherit from dependents: repeat until nothing changes (chains are short).
+  for (let pass = 0, changed = true; changed && pass < 20; pass++) {
+    changed = false;
+    for (const t of open) for (const d of t.deps || []) {
+      const x = byName.get(d), ux = x && out[x.path], ut = out[t.path];
+      if (!ux || !ut || ut.tier >= ux.tier) continue;
+      ux.tier = ut.tier; ux.reason = `Unblocks ${t.title}`; ux.via = t.path; changed = true;
+    }
+  }
+  for (const k in out) out[k].label = TIERS[out[k].tier];
+  return out;
+}
+function urgencyOrder(cfg, mults, urg) {
+  return (a, b) => ((urg[a.path] || {}).tier ?? 2) - ((urg[b.path] || {}).tier ?? 2) ||
+    priorityRank(cfg, a.priority) - priorityRank(cfg, b.priority) ||
+    (a.due || "9999").localeCompare(b.due || "9999") ||
+    adjusted(b, mults) - adjusted(a, mults) ||
+    a.title.localeCompare(b.title);
+}
+function fmtHours(h) { const r = Math.round(h * 10) / 10; return `${r}h`; }
+
 // Board columns. By week: the week a task is due (overdue, this week onward, later, no due date).
-function board(open, cfg, settings, weeks, today) {
+function board(open, cfg, settings, weeks, today, urg) {
   const mults = settings.multipliers || {};
-  const order = (a, b) => priorityRank(cfg, a.priority) - priorityRank(cfg, b.priority) || (a.due || "9999").localeCompare(b.due || "9999") || adjusted(b, mults) - adjusted(a, mults) || a.title.localeCompare(b.title);
+  const order = urgencyOrder(cfg, mults, urg || {});
   const live = weeks.filter(w => !w.isPast);
   const cols = [{ key: "overdue", label: "Overdue", tasks: [] },
     ...live.map(w => ({ key: w.week, label: w.isCurrent ? "This week" : w.week.slice(5), week: w, tasks: [] })),
@@ -804,7 +852,7 @@ module.exports = {
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,
   readDotpmConfig, isComplete, doneStatusId, priorityRank, label,
   linkText, parseChecklist, checklistProgress, parseTask,
-  typeKey, multiplierFor, remaining, adjusted, recordMultiplier, ensureMultipliers, multiplierOn, measured,
+  typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute,
   linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek,
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,

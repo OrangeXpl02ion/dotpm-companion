@@ -66,7 +66,9 @@ test("capacity totals equal remaining hours (nothing lost or double-counted)", (
   const weeksRaw = R.weeks.reduce((a, w) => a + w.raw, 0);
   assert.ok(Math.abs(rawSum - weeksRaw) < 1e-6, `${rawSum} vs ${weeksRaw}`);
   const weeksAdj = R.weeks.reduce((a, w) => a + w.adj, 0);
-  assert.ok(Math.abs(weeksAdj - 2 * weeksRaw) < 1e-6, "all multipliers 2 → adjusted is exactly double");
+  const adjOpen = tasks.filter(t => !M.isComplete(cfg, t.status) && t.due && M.adjusted(t, S0()) > 0 && t.due <= "2026-12-13");
+  const adjSum = adjOpen.reduce((a, t) => a + M.adjusted(t, S0()), 0);
+  assert.ok(Math.abs(weeksAdj - adjSum) < 1e-6, `${adjSum} vs ${weeksAdj}`);
   for (const w of R.weeks) {
     const byType = Object.values(w.byType).reduce((a, b) => a + b, 0);
     assert.ok(Math.abs(byType - w.adj) < 1e-6);
@@ -109,8 +111,11 @@ test("queue order and filters", () => {
   const today = "2026-10-20";
   const R = M.compute(tasks, cfg, settings, today);
   assert.ok(R.queue.every(t => !t.start || t.start <= today));
-  for (let i = 1; i < R.queue.length; i++)
-    assert.ok(M.priorityRank(cfg, R.queue[i - 1].priority) <= M.priorityRank(cfg, R.queue[i].priority));
+  for (let i = 1; i < R.queue.length; i++) {
+    const ta = R.urgency[R.queue[i - 1].path].tier, tb = R.urgency[R.queue[i].path].tier;
+    assert.ok(ta <= tb, "urgency tier first");
+    if (ta === tb) assert.ok(M.priorityRank(cfg, R.queue[i - 1].priority) <= M.priorityRank(cfg, R.queue[i].priority), "then priority");
+  }
   assert.ok(R.upcoming > 20);
 });
 
@@ -266,4 +271,40 @@ test("per-project load adds up to the week and groups by top-level project", () 
   assert.deepEqual(g.map(x => x.title), ["Furniture", "Portfolio", "Studio", "Loose", "No project"]);
   assert.deepEqual(g[1].members.map(m => m.title), ["Portfolio", "About Page", "Kettle"]);
   assert.ok(g[1].members[0].own && !g[0].members[0].own);
+});
+
+const S0 = () => settings.multipliers || {};
+
+test("hours left: estimate × multiplier − logged", () => {
+  const t = { estimate: 5, logged: 4, workType: "CAD" };
+  assert.equal(M.remaining(t), 1);
+  assert.equal(M.adjusted(t, { CAD: 2 }), 6);
+  assert.equal(M.adjusted({ ...t, logged: 12 }, { CAD: 2 }), 0, "never negative");
+  assert.equal(M.overBudget({ ...t, logged: 10 }, { CAD: 2 }), true);
+  assert.equal(M.overBudget(t, { CAD: 2 }), false);
+  assert.equal(M.overBudget({ estimate: null, logged: 3 }, {}), false);
+});
+
+test("urgency tiers and inheritance", () => {
+  const today = "2026-10-20";
+  const base = { status: "todo", start: null, logs: [], logged: 0, workType: "CAD", deps: [] };
+  const S = { ...settings, multipliers: { CAD: 2 }, capacity: {}, defaultWeeklyHours: 70, tightPct: 50 }; // 10 h a day
+  const T = [
+    { ...base, path: "a.md", title: "high far", priority: "high", due: "2026-11-20", estimate: 4 },
+    { ...base, path: "b.md", title: "medium tomorrow", priority: "medium", due: "2026-10-21", estimate: 1 },
+    { ...base, path: "c.md", title: "low tight", priority: "low", due: "2026-10-24", estimate: 15 }, // 30h of 50h
+    { ...base, path: "d.md", title: "short", priority: "low", due: "2026-10-23", estimate: 25 }, // 50h of 40h
+    { ...base, path: "e.md", title: "blocker", priority: "low", due: "2026-11-30", estimate: 1 },
+    { ...base, path: "f.md", title: "needs blocker", priority: "low", due: "2026-10-22", estimate: 8, deps: ["e"] }, // 16h of 30h → tight
+  ];
+  const R = M.compute(T, cfg, S, today);
+  const u = p => R.urgency[p];
+  assert.equal(u("a.md").label, "normal");
+  assert.equal(u("b.md").label, "now"); assert.equal(u("b.md").reason, "Due tomorrow");
+  assert.equal(u("c.md").label, "tight");
+  assert.equal(u("d.md").label, "now"); assert.match(u("d.md").reason, /^Short/);
+  assert.equal(u("e.md").label, "tight", "takes the tier of the task waiting on it");
+  assert.match(u("e.md").reason, /Unblocks needs blocker/);
+  assert.equal(R.queue[0].title, "medium tomorrow", "due tomorrow beats a high-priority task due next month");
+  assert.equal(R.queue.at(-1).title, "high far");
 });

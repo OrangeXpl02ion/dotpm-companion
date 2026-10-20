@@ -59,6 +59,11 @@
 .dpc-badge { display: inline-flex; align-items: center; gap: 4px; font-size: 0.85em; font-weight: 500; padding: 1px 7px 1px 5px; border-radius: 10px; white-space: nowrap; }
 .dpc-badge-icon { font-size: 0.85em; font-weight: 700; }
 .dpc-badge-risk { color: var(--dpc-risk); background: color-mix(in srgb, var(--dpc-risk) 12%, transparent); }
+.dpc-urg { font-size: 0.85em; white-space: nowrap; color: var(--text-muted); }
+.dpc-urg-now { color: var(--dpc-risk); }
+.dpc-urg-now strong, .dpc-urg-tight strong { font-weight: 600; }
+.dpc-urg-tight { color: var(--dpc-over); }
+.dpc-card .dpc-urg { display: block; margin: 2px 0; }
 .dpc-badge-over { color: var(--dpc-over); background: color-mix(in srgb, var(--dpc-over) 12%, transparent); }
 .dpc-warn { color: var(--dpc-risk); }
 

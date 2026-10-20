@@ -15,6 +15,7 @@ const DEFAULTS = {
   rangeStart: "2026-10-19",
   rangeEnd: "2026-12-11",
   overloadPct: 85,
+  tightPct: 50,
   progressFromChecklist: true,
   multipliers: {},
   multiplierHistory: [],
@@ -767,6 +768,8 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setPlaceholder("end").setValue(S.rangeEnd).onChange(async v => { if (M.isDate(v)) { S.rangeEnd = v; await save(); } }));
     new Setting(el).setName("Overload threshold").setDesc("Flag a week at this share of available hours (%).")
       .addText(t => t.setValue(String(S.overloadPct)).onChange(async v => { const n = parseFloat(v); if (n > 0) { S.overloadPct = n; await save(); } }));
+    new Setting(el).setName("Tight threshold (%)").setDesc("The queue marks a task Tight when its hours left (× multiplier) take at least this share of the hours available before it's due.")
+      .addText(t => t.setValue(String(S.tightPct || 50)).onChange(async v => { const n = parseFloat(v); if (n > 0 && n <= 100) { S.tightPct = n; await save(); } }));
     new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks.")
       .addToggle(t => t.setValue(S.progressFromChecklist).onChange(async v => { S.progressFromChecklist = v; await save(); }));
     new Setting(el).setName("dotpm tab project").setDesc("What the dotpm tab opens on.")
