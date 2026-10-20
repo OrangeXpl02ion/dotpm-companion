@@ -38,7 +38,7 @@ class CompanionView extends ItemView {
     const root = this.contentEl;
     V.render(root, {
       tab: this.tab, mode: this.mode, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
-      bridged: !!p.dotpm(), showMore: !!this.showMore,
+      bridged: !!p.dotpm(), showMore: !!this.showMore, projectColors: p.projectColors,
       cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity }, tasks: p.taskList(), result: p.result,
     }, {
       setTab: t => { this.tab = t; p.settings.lastTab = t; p.saveSettings(); this.refresh(); },
@@ -65,6 +65,7 @@ class CompanionView extends ItemView {
 module.exports = class DotpmCompanion extends Plugin {
   async onload() {
     this.tasks = new Map();
+    this.projectColors = {};
     this.capacity = {};
     this.result = null;
     this.pendingProgress = new Map();
@@ -121,6 +122,7 @@ module.exports = class DotpmCompanion extends Plugin {
   async indexFile(file, content) {
     if (!(file instanceof TFile) || !this.inProjects(file.path)) return null;
     const fm = (this.app.metadataCache.getFileCache(file) || {}).frontmatter;
+    if (fm && fm["pm-project"] === true && typeof fm.title === "string") this.projectColors[fm.title] = typeof fm.color === "string" ? fm.color : null;
     if (!fm || fm["pm-task"] !== true) { this.tasks.delete(file.path); return null; }
     const text = content != null ? content : await this.app.vault.cachedRead(file);
     const t = M.parseTask(file.path, fm, M.bodyOf(text), this.cfg);

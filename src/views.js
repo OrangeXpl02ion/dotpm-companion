@@ -280,42 +280,41 @@ function renderMore(body, st, on, open) {
 }
 
 // ---------- board ----------
+// Styled after dotpm's own kanban: colored column tops with count pills, compact cards with hours,
+// progress, a project chip and the due date. Actions (✓, Move…) show on hover, always on touch screens.
 function renderBoard(body, st, on) {
-  const doc = body.ownerDocument, R = st.result, cfg = st.cfg, mults = st.settings.multipliers;
+  const doc = body.ownerDocument, R = st.result, cfg = st.cfg;
   const mode = st.settings.boardMode === "status" ? "status" : "week";
   body.append(h(doc, "div", { class: "dpc-toolbar" },
-    h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board columns" }, [["week", "By week"], ["status", "By status"]].map(([id, name]) =>
+    h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board columns" }, [["week", "By week due"], ["status", "By status"]].map(([id, name]) =>
       h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
-    h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Cards sit in the week they're due, in queue order. Drag a card to another week to move its dates." : "Drag a card to change its status.")));
+    h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates." : "Drag a card to change its status.")));
   const open = st.tasks.filter(t => !M.isComplete(cfg, t.status));
   let cols;
-  if (mode === "week") cols = R.board;
+  if (mode === "week") cols = R.board.map(c => ({ ...c, color: c.key === "overdue" ? "var(--dpc-risk)" : c.week && c.week.overloaded ? "var(--dpc-over)" : c.week && c.week.isCurrent ? "var(--interactive-accent, var(--text-accent))" : "var(--text-faint)" }));
   else {
     const order = R.queue.concat(open.filter(t => !R.queue.includes(t)));
-    cols = cfg.statuses.filter(x => !x.complete || x.id === M.doneStatusId(cfg)).map(x => ({ key: x.id, label: x.label,
-      tasks: x.complete ? R.doneToday : order.filter(t => t.status === x.id), done: !!x.complete }));
+    cols = cfg.statuses.map(x => ({ key: x.id, label: x.label, color: x.color || "var(--text-faint)", done: !!x.complete,
+      tasks: x.complete ? st.tasks.filter(t => t.status === x.id).sort((a, b) => (b.completed || "").localeCompare(a.completed || "")) : order.filter(t => t.status === x.id) }));
   }
-  const targets = mode === "week" ? R.board.filter(c => c.week).map(c => ({ key: c.key, label: c.week.isCurrent ? "This week" : `${c.key.slice(5)} (${fmtD(c.week.start)})` }))
+  const targets = mode === "week" ? R.board.filter(c => c.week).map(c => ({ key: c.key, label: c.week.isCurrent ? "This week" : `${c.key.slice(5)} · ${fmtD(c.week.start)}` }))
     : cfg.statuses.map(x => ({ key: x.id, label: x.label }));
   const wrap = h(doc, "div", { class: "dpc-board" });
   for (const c of cols) {
     const w = c.week;
-    const hrs = c.tasks.reduce((a, t) => a + M.adjusted(t, mults), 0);
     const head = h(doc, "div", { class: "dpc-col-head" },
-      h(doc, "div", { class: "dpc-col-title" }, h(doc, "strong", {}, c.label), h(doc, "span", { class: "dpc-muted" }, ` ${c.tasks.length}`)),
-      w ? h(doc, "div", { class: "dpc-col-sub" }, h(doc, "span", { class: "dpc-muted" }, `${fmtD(w.start)} – ${fmtD(w.end)}`),
+      h(doc, "div", { class: "dpc-col-title" }, h(doc, "span", { class: "dpc-col-name", style: `color:${c.color}` }, c.label), h(doc, "span", { class: "dpc-count" }, String(c.tasks.length))),
+      w ? h(doc, "div", { class: "dpc-col-sub" }, h(doc, "span", { class: "dpc-muted dpc-nowrap" }, `${fmtD(w.start)} – ${fmtD(w.end)}`),
           h(doc, "div", { class: "dpc-meter dpc-meter-sm" + (w.overloaded ? " is-over" : ""), role: "img", "aria-label": `${Math.round(w.pct * 100)}% committed` },
             h(doc, "div", { class: "dpc-meter-fill", style: `width:${Math.min(100, w.pct * 100)}%` })),
-          h(doc, "span", { class: "dpc-muted dpc-nowrap", title: "Committed this week (all tasks spread over their dates, × multipliers) of available" }, `${fmtH(w.adj)} / ${fmtH(w.available)}`))
-        : h(doc, "div", { class: "dpc-col-sub dpc-muted" }, c.done ? "finished today" : hrs ? `${fmtH(hrs)} left ×` : ""));
+          h(doc, "span", { class: "dpc-muted dpc-nowrap", title: "Committed this week (× multipliers) of available hours" }, `${fmtH(w.adj)}/${fmtH(w.available)}`)) : null);
     const list = h(doc, "div", { class: "dpc-col-list" });
     for (const t of c.tasks) list.append(card(doc, t, st, on, mode, targets));
-    if (!c.tasks.length) list.append(h(doc, "div", { class: "dpc-col-empty dpc-muted" }, "—"));
-    const col = h(doc, "section", { class: "dpc-col" + (w && w.isCurrent ? " is-current" : "") + (w && w.overloaded ? " is-over" : ""), "aria-label": c.label }, head, list);
-    const droppable = mode === "status" ? cfg.statuses.some(x => x.id === c.key) : !!w;
+    const col = h(doc, "section", { class: "dpc-col" + (w && w.isCurrent ? " is-current" : ""), style: `--dpc-col:${c.color}`, "aria-label": c.label }, head, list);
+    const droppable = mode === "status" ? true : !!w;
     if (droppable) {
       col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("is-drop"); });
-      col.addEventListener("dragleave", () => col.classList.remove("is-drop"));
+      col.addEventListener("dragleave", e => { if (!col.contains(e.relatedTarget)) col.classList.remove("is-drop"); });
       col.addEventListener("drop", e => { e.preventDefault(); col.classList.remove("is-drop"); const p = e.dataTransfer.getData("text/plain"); if (p) on.moveCard(p, c.key); });
     }
     wrap.append(col);
@@ -325,22 +324,34 @@ function renderBoard(body, st, on) {
 function card(doc, t, st, on, mode, targets) {
   const R = st.result, cfg = st.cfg;
   const done = M.isComplete(cfg, t.status);
-  const el = h(doc, "article", { class: "dpc-card" + (done ? " is-done" : "") + (R.blocked.has(t.path) ? " is-waiting" : ""), draggable: done ? null : "true" });
+  const pri = cfg.priorities.find(x => x.id === t.priority);
+  const top = pri && t.priority !== "medium" ? (pri.color || "transparent") : "transparent";
+  const el = h(doc, "article", { class: "dpc-card" + (done ? " is-done" : "") + (R.blocked.has(t.path) && !done ? " is-waiting" : ""), draggable: "true",
+    style: `--dpc-top:${top}`, title: R.blocked.has(t.path) && !done ? "Waiting on another task" : null });
   el.addEventListener("dragstart", e => { e.dataTransfer.setData("text/plain", t.path); e.dataTransfer.effectAllowed = "move"; el.classList.add("is-drag"); });
   el.addEventListener("dragend", () => el.classList.remove("is-drag"));
+  el.addEventListener("click", e => { if (e.target.closest("button, select, a")) return; on.openTask(t.path); });
+  const pct = Math.max(0, Math.min(100, t.progress || 0));
+  const hrs = t.estimate != null ? `${fmtH(t.logged).replace("h", "")}/${fmtH(t.estimate)}` : t.logged ? fmtH(t.logged) : null;
+  const projColor = (st.projectColors && st.projectColors[t.project]) || "var(--text-faint)";
   const cur = mode === "status" ? t.status : (t.due ? M.isoWeek(t.due) : "");
   const move = h(doc, "select", { class: "dropdown dpc-move", "aria-label": `Move ${t.title}` },
     h(doc, "option", { value: "", selected: true, disabled: true }, "Move…"), targets.filter(x => x.key !== cur).map(x => h(doc, "option", { value: x.key }, x.label)));
   move.addEventListener("change", () => { if (move.value) on.moveCard(t.path, move.value); });
-  el.append(
-    h(doc, "div", { class: "dpc-card-top" }, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(cfg.priorities, t.priority)),
-      t.workType ? h(doc, "span", { class: "dpc-type dpc-muted" }, h(doc, "span", { class: "dpc-dot", style: `background:${typeColor(cfg, t.workType)}` }), t.workType) : null,
-      riskBadge(doc, R.risk[t.path])),
-    h(doc, "div", { class: "dpc-card-title" }, t.type === "milestone" ? "◆ " : null, taskLink(doc, t, on)),
-    h(doc, "div", { class: "dpc-card-meta dpc-muted" }, [t.project, t.due ? `due ${fmtD(t.due)}` : null, !done && M.remaining(t) > 0 ? `${fmtH(M.adjusted(t, st.settings.multipliers))} ×` : null,
-      R.blocked.has(t.path) ? "waiting on another task" : null].filter(Boolean).join(" · ")),
-    done ? h(doc, "button", { class: "dpc-small", onclick: () => on.undoDone(t.path) }, "Undo") : h(doc, "div", { class: "dpc-card-foot" }, move,
-      h(doc, "button", { class: "dpc-done", title: "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓")));
+  const overdue = !done && t.due && t.due < R.today;
+  el.append(...[
+    h(doc, "div", { class: "dpc-card-head" }, h(doc, "span", { class: "dpc-card-title" }, t.title),
+      t.type === "milestone" ? h(doc, "span", { class: "dpc-ms", title: "Milestone" }, "M") : null),
+    hrs || R.risk[t.path] ? h(doc, "div", { class: "dpc-card-meta" }, hrs ? h(doc, "span", { class: "dpc-hrs" }, hrs) : null,
+      !done && M.remaining(t) > 0 && st.settings.multipliers ? h(doc, "span", { class: "dpc-muted", title: "Hours left with multiplier" }, `${fmtH(M.adjusted(t, st.settings.multipliers))} ×`) : null,
+      riskBadge(doc, R.risk[t.path])) : null,
+    pct > 0 ? h(doc, "div", { class: "dpc-card-prog", role: "img", "aria-label": `${pct}% done` }, h(doc, "div", { style: `width:${pct}%` })) : null,
+    h(doc, "div", { class: "dpc-card-foot" },
+      h(doc, "span", { class: "dpc-chip" }, h(doc, "span", { class: "dpc-dot", style: `background:${projColor}` }), t.project || "—"),
+      t.due ? h(doc, "span", { class: "dpc-card-due" + (overdue ? " dpc-warn" : "") }, fmtD(t.due)) : null),
+    h(doc, "div", { class: "dpc-card-actions" }, move,
+      done ? h(doc, "button", { class: "dpc-small", onclick: () => on.undoDone(t.path) }, "Undo")
+        : h(doc, "button", { class: "dpc-done", title: "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓"))].filter(Boolean));
   return el;
 }
 

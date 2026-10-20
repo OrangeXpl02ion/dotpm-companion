@@ -28,7 +28,7 @@ window.setup=(o)=>{
   const today=o.today||"2026-10-20";
   const TS=tasks.map(t=>({...t}));
   for(const [title,f] of (o.mutate||[])){const t=TS.find(x=>x.title===title); if(t)Object.assign(t,f);}
-  S.projectsFolder="Project/";const tasks2=TS;const st={tab:o.tab,mode:o.mode||"adj",expanded:o.expanded||null,collapsed:new Set(o.collapsed||[]),query:o.query||"",bridged:true,cfg,settings:S,tasks:tasks2,result:M.compute(tasks2,cfg,S,today),showMore:!!o.showMore};
+  S.projectsFolder="Project/";const tasks2=TS;const st={tab:o.tab,mode:o.mode||"adj",expanded:o.expanded||null,collapsed:new Set(o.collapsed||[]),query:o.query||"",bridged:true,projectColors:{"Gardening Studio":"#79b58d","Kettle":"#c47070","About Page":"#8a94a0","Hero Showreel":"#767491","Peloton":"#b8a06b"},cfg,settings:S,tasks:tasks2,result:M.compute(tasks2,cfg,S,today),showMore:!!o.showMore};
   const root=document.getElementById("root");
   const on={undoDone(){},startNow(){},moveCard(){},setBoardMode(){},toggleMore(){},setTab(){},setMode(){},toggleWeek(){},openTask(){},openFile(){},markDone(){},setField(){},setShowDone(){},toggleGroup(){},setQuery(){},setMultiplier(){},createCapacity(){}};
   V.render(root,st,on);
