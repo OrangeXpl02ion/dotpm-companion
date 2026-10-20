@@ -6,6 +6,9 @@ __mods["./model"] = function(module, exports, require){
 // Pure calculations. No Obsidian imports, so this file is unit-tested in Node.
 
 const NO_TYPE = "__none";
+// dotpm's own default sort, and the companion's replacement (due date, then priority; dotpm ranks priority by list order).
+const DUE_SORT = [{ key: "due", dir: "asc" }, { key: "priority", dir: "asc" }];
+function isDefaultSort(sort) { return !Array.isArray(sort) || !sort.length || (sort.length === 1 && sort[0] && sort[0].key === "status" && sort[0].dir !== "desc"); }
 const DEFAULT_MULTIPLIER = 2;
 
 // ---------- dates (YYYY-MM-DD strings, UTC day arithmetic) ----------
@@ -104,6 +107,7 @@ function parseTask(path, fm, body, cfg) {
     progress: typeof fm.progress === "number" ? fm.progress : 0,
     checklist: parseChecklist(body),
     completed: normDate(fm.completed),
+    customFields: { ...cf },
     deps: Array.isArray(fm.dependencies) ? fm.dependencies.map(linkTarget).filter(Boolean) : [],
   };
 }
@@ -351,7 +355,7 @@ function setFrontmatterLines(text, fields) {
 
 module.exports = {
   bodyOf, setFrontmatterLines,
-  NO_TYPE, DEFAULT_MULTIPLIER,
+  NO_TYPE, DEFAULT_MULTIPLIER, DUE_SORT, isDefaultSort,
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,
   readDotpmConfig, isComplete, doneStatusId, priorityRank, label,
   linkText, parseChecklist, checklistProgress, parseTask,
@@ -399,11 +403,11 @@ function relDue(due, today) {
 }
 
 // Fixed categorical order = the work-type option order in dotpm. "No work-type" is neutral gray.
-function typeKeys(cfg) { return [...cfg.workTypes, M.NO_TYPE]; }
-function typeName(k) { return k === M.NO_TYPE ? "No work-type" : k; }
+function typeKeys(cfg) { return [...cfg.workTypes, ...(cfg.extraTypes || []), M.NO_TYPE]; }
+function typeName(k, cfg) { return k === M.NO_TYPE ? "No work-type" : cfg && (cfg.extraTypes || []).includes(k) ? `${k} (not in dotpm's list)` : k; }
 function typeColor(cfg, k) {
   const i = cfg.workTypes.indexOf(k);
-  return i === -1 || i > 7 ? "var(--dpc-none)" : `var(--dpc-s${i + 1})`;
+  return i === -1 ? "var(--dpc-none)" : i < 9 ? `var(--dpc-s${i + 1})` : "var(--dpc-none)";
 }
 
 // ---------- shell ----------
@@ -680,7 +684,7 @@ function renderTypes(body, st, on) {
       const d = `M${x},${yy + hgt} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + bw - r} Q${x + bw},${yy} ${x + bw},${yy + r} V${yy + hgt} Z`;
       const seg = s(doc, "path", { d, fill: typeColor(cfg, k), class: "dpc-seg-mark", tabindex: 0 });
       const show = e => {
-        tip.textContent = `${w.week.slice(5)} · ${typeName(k)}: ${fmtH(v)} of ${fmtH(totals[i])}`; tip.classList.add("is-on");
+        tip.textContent = `${w.week.slice(5)} · ${typeName(k, cfg)}: ${fmtH(v)} of ${fmtH(totals[i])}`; tip.classList.add("is-on");
         const r = seg.getBoundingClientRect();
         placeTip(tip, wrap, e && e.clientX != null ? e.clientX : r.right, e && e.clientY != null ? e.clientY : r.top + r.height / 2);
       };
@@ -697,7 +701,7 @@ function renderTypes(body, st, on) {
   body.append(legend(doc, cfg, present, true), wrap);
   // table view
   const t = h(doc, "table", { class: "dpc-table dpc-types-table" },
-    h(doc, "thead", {}, h(doc, "tr", {}, h(doc, "th", {}, "Week"), present.map(k => h(doc, "th", { class: "dpc-num" }, typeName(k))), h(doc, "th", { class: "dpc-num" }, "Total"), h(doc, "th", { class: "dpc-num" }, "Available"))),
+    h(doc, "thead", {}, h(doc, "tr", {}, h(doc, "th", {}, "Week"), present.map(k => h(doc, "th", { class: "dpc-num" }, typeName(k, cfg))), h(doc, "th", { class: "dpc-num" }, "Total"), h(doc, "th", { class: "dpc-num" }, "Available"))),
     h(doc, "tbody", {}, R.weeks.map((w, i) => h(doc, "tr", { class: w.isCurrent ? "is-current" : "" }, h(doc, "td", {}, w.week.slice(5)),
       present.map(k => h(doc, "td", { class: "dpc-num" }, w[field][k] ? fmtH(w[field][k]) : "")),
       h(doc, "td", { class: "dpc-num" }, fmtH(totals[i])), h(doc, "td", { class: "dpc-num dpc-muted" }, fmtH(w.available))))));
@@ -717,7 +721,7 @@ function placeTip(tip, wrap, clientX, clientY) {
 function niceStep(max) { const raw = max / 4; const p = Math.pow(10, Math.floor(Math.log10(raw))); const n = raw / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; }
 function legend(doc, cfg, keys, withCap) {
   return h(doc, "div", { class: "dpc-legend" }, keys.map(k =>
-    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k))),
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k, cfg))),
     withCap ? h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), "Available") : null);
 }
 
@@ -729,10 +733,10 @@ function renderMultipliers(body, st, on) {
   const tb = h(doc, "tbody");
   for (const k of keys) {
     const m = R.measured[k];
-    const input = h(doc, "input", { type: "number", min: "0.1", max: "10", step: "0.1", value: String(M.multiplierFor(set.multipliers, k)), class: "dpc-mult-input", "aria-label": `${typeName(k)} multiplier` });
+    const input = h(doc, "input", { type: "number", min: "0.1", max: "10", step: "0.1", value: String(M.multiplierFor(set.multipliers, k)), class: "dpc-mult-input", "aria-label": `${typeName(k, cfg)} multiplier` });
     input.addEventListener("change", () => { const v = parseFloat(input.value); if (isFinite(v) && v > 0) on.setMultiplier(k, Math.round(v * 100) / 100); });
     tb.append(h(doc, "tr", {},
-      h(doc, "td", {}, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k)),
+      h(doc, "td", {}, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k, cfg)),
       h(doc, "td", {}, input, " ×"),
       h(doc, "td", { class: m ? "" : "dpc-muted" }, m ? `${fmtX(m.factor)} from ${m.n} done task${m.n === 1 ? "" : "s"}` : "no done tasks with time logs yet")));
   }
@@ -808,7 +812,7 @@ function trendChart(doc, body, cfg, history, keys, today, measuredSeries) {
     tip.replaceChildren(h(doc, "strong", {}, fmtD(day)), ...shown.map(k => {
       const v = M.multiplierOn(history, k, day);
       const ms = (measuredSeries[k] || []).filter(p => p.date <= day).pop();
-      return h(doc, "div", {}, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), `${typeName(k)}: ${v == null ? "—" : fmtX(v)}`,
+      return h(doc, "div", {}, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), `${typeName(k, cfg)}: ${v == null ? "—" : fmtX(v)}`,
         ms ? h(doc, "span", { class: "dpc-muted" }, ` · measured ${fmtX(ms.value)} (${ms.n})`) : null);
     }));
     tip.classList.add("is-on");
@@ -824,7 +828,7 @@ function trendChart(doc, body, cfg, history, keys, today, measuredSeries) {
   const changes = history.slice().reverse();
   wrap.append(h(doc, "details", { class: "dpc-details" }, h(doc, "summary", {}, `Change history (${changes.length})`),
     h(doc, "table", { class: "dpc-table" }, h(doc, "thead", {}, h(doc, "tr", {}, ["Date", "Work type", "Multiplier"].map(c => h(doc, "th", {}, c)))),
-      h(doc, "tbody", {}, changes.map(p => h(doc, "tr", {}, h(doc, "td", {}, fmtD(p.date)), h(doc, "td", {}, typeName(p.type)), h(doc, "td", {}, fmtX(p.value))))))));
+      h(doc, "tbody", {}, changes.map(p => h(doc, "tr", {}, h(doc, "td", {}, fmtD(p.date)), h(doc, "td", {}, typeName(p.type, cfg)), h(doc, "td", {}, fmtX(p.value))))))));
   return wrap;
 }
 
@@ -852,6 +856,9 @@ const DEFAULTS = {
   multiplierHistory: [],
   lastTab: "dotpm",
   dotpmScope: "",
+  dotpmDueSort: true,
+  dotpmSortSeen: [],
+  workTypeFromProject: true,
   dotpmState: null,
   showDone: false,
   boardMode: "today",
@@ -895,7 +902,7 @@ class CompanionView extends ItemView {
     v.containerEl.setAttribute("data-type", "pm-project");
     host.append(v.containerEl);
     v.load();
-    const state = p.settings.dotpmState && p.settings.dotpmState.scope ? p.settings.dotpmState : { scope: { kind: "project", path: p.rootProjectPath() } };
+    const state = { scope: p.validScope(p.settings.dotpmState && p.settings.dotpmState.scope) || p.defaultScope() };
     this.dotpmReady = (async () => {
       await v.setState(state, { history: false });
       await v.onOpen();
@@ -977,6 +984,8 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.app.workspace.onLayoutReady(async () => {
       await this.reloadDotpmConfig();
       await this.rebuildIndex();
+      try { await this.applyDotpmDueSort(); } catch (e) { console.warn("[dotpm-companion] could not set dotpm's default sort", e); }
+      for (const t of this.taskList()) if (!t.workType) await this.applyProjectWorkType(t.path);
       this.registerEvent(this.app.metadataCache.on("changed", (file, data, cache) => this.onChanged(file, data, cache)));
       this.registerEvent(this.app.vault.on("delete", f => { if (this.tasks.delete(f.path)) this.scheduleRecompute(); if (f.path === this.settings.capacityFile) this.loadCapacity().then(() => this.scheduleRecompute()); }));
       this.registerEvent(this.app.vault.on("rename", (f, old) => { if (this.tasks.has(old)) { this.tasks.delete(old); this.indexFile(f).then(() => this.scheduleRecompute()); } }));
@@ -1008,6 +1017,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     try { this.cfg = M.readDotpmConfig(JSON.parse(await this.app.vault.adapter.read(p))); }
     catch (e) { console.warn("[dotpm-companion] could not read dotpm settings; using defaults", e); }
     if (M.ensureMultipliers(this.settings, V.typeKeys(this.cfg), M.localToday())) await this.saveSettings();
+    this.cfg.extraTypes = [];
   }
 
   inProjects(path) { return path.startsWith(this.cfg.projectsFolder) && path.endsWith(".md") && !path.includes("/Archive/"); }
@@ -1043,10 +1053,14 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const t = await this.indexFile(file, data);
     this.scheduleRecompute();
     if (t && this.settings.progressFromChecklist) this.queueProgress(file.path);
+    if (t && !t.workType) this.applyProjectWorkType(file.path);
+    if (!t && data && /^---[\s\S]*?pm-project: true/.test(data)) this.applyDotpmDueSort();
   }
 
   recompute() {
     const today = M.localToday();
+    // work types still on tasks but no longer in dotpm's list (e.g. a renamed option) stay visible
+    this.cfg.extraTypes = [...new Set(this.taskList().map(t => t.workType).filter(w => w && !this.cfg.workTypes.includes(w)))].sort();
     this.result = M.compute(this.taskList(), this.cfg, { ...this.settings, capacity: this.capacity }, today);
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) if (leaf.view instanceof CompanionView) leaf.view.refresh();
   }
@@ -1079,7 +1093,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     try { if (await this.updateViaDotpm(t.id, patch)) return; }
     catch (e) { console.warn("[dotpm-companion] dotpm update failed; editing the file instead", e); }
     const lines = {};
-    for (const k in patch) lines[k] = typeof patch[k] === "number" ? String(patch[k]) : JSON.stringify(patch[k]);
+    for (const k in patch) { if (typeof patch[k] === "object" && patch[k] !== null) return; lines[k] = typeof patch[k] === "number" ? String(patch[k]) : JSON.stringify(patch[k]); }
     const f = this.app.vault.getAbstractFileByPath(path);
     if (f instanceof TFile) await this.app.vault.process(f, text => M.setFrontmatterLines(text, lines));
   }
@@ -1193,16 +1207,57 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     await this.loadCapacity(); this.recompute();
     this.app.workspace.getLeaf(true).openFile(f);
   }
-  // Top-level project for the dotpm tab: the one chosen in settings, else the first project with no parent.
-  rootProjectPath() {
-    const notes = this.projectNotes;
-    if (this.settings.dotpmScope && notes[this.settings.dotpmScope]) return this.settings.dotpmScope;
-    const roots = Object.keys(notes).filter(k => !notes[k].parent).sort();
-    return roots[0] || Object.keys(notes).sort()[0] || "";
+  // dotpm tab scope: the project chosen in settings, else every project in the vault.
+  defaultScope() {
+    const p = this.settings.dotpmScope;
+    return p && this.projectNotes[p] ? { kind: "project", path: p } : { kind: "vault" };
+  }
+  // A remembered scope is only reused while its projects still exist.
+  validScope(sc) {
+    if (!sc || typeof sc !== "object") return null;
+    if (sc.kind === "vault") return sc;
+    if ((sc.kind === "project" || sc.kind === "subtree") && this.projectNotes[sc.path]) return sc;
+    if (sc.kind === "picked" && Array.isArray(sc.paths)) { const ok = sc.paths.filter(x => this.projectNotes[x]); return ok.length ? { kind: "picked", paths: ok } : null; }
+    return null;
   }
   async openDotpmInTab() {
     const leaf = this.app.workspace.getLeaf("tab");
-    await leaf.setViewState({ type: "pm-project", active: true, state: { scope: { kind: "project", path: this.rootProjectPath() } } });
+    await leaf.setViewState({ type: "pm-project", active: true, state: { scope: this.defaultScope() } });
+  }
+
+  // ---- dotpm default sort: due date, then priority ----
+  // dotpm starts every view sorted by status. For each scope the companion hasn't seen yet and that is
+  // still on dotpm's default, switch it to due → priority once; a sort you pick in dotpm afterwards is kept.
+  async applyDotpmDueSort() {
+    const pm = this.dotpm();
+    if (!this.settings.dotpmDueSort || !pm || !pm.settings || typeof pm.settings.projectFilters !== "object") return;
+    const pf = pm.settings.projectFilters;
+    const seen = new Set(this.settings.dotpmSortSeen || []);
+    const keys = new Set(["vault", ...Object.keys(this.projectNotes).map(k => `project:${k}`), ...Object.keys(pf)]);
+    let changed = false;
+    for (const key of keys) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const e = pf[key];
+      if (!e) {
+        pf[key] = { filter: { conditions: [], showArchived: false }, activeSavedViewId: null, sort: M.DUE_SORT.map(x => ({ ...x })), group: { field: "status" },
+          fields: structuredClone(pm.settings.defaultFields || {}), ganttGranularity: pm.settings.ganttGranularity || "week", nonWorkingDays: {} };
+        changed = true;
+      } else if (M.isDefaultSort(e.sort)) { e.sort = M.DUE_SORT.map(x => ({ ...x })); changed = true; }
+    }
+    this.settings.dotpmSortSeen = [...seen];
+    await this.saveSettings();
+    if (changed && typeof pm.saveSettings === "function") await pm.saveSettings();
+  }
+
+  // ---- default work-type from the project's name (IDSA, Fun, Misc…) ----
+  async applyProjectWorkType(path) {
+    if (!this.settings.workTypeFromProject || !this.cfg.workTypeFieldId) return;
+    const t = this.tasks.get(path);
+    if (!t || t.workType) return;
+    const wt = this.cfg.workTypes.find(x => x.toLowerCase() === String(t.project || "").toLowerCase());
+    if (!wt) return;
+    await this.updateTask(path, { customFields: { ...(t.customFields || {}), [this.cfg.workTypeFieldId]: wt } });
   }
   async activateView(tab) {
     if (tab) this.settings.lastTab = tab;
@@ -1231,17 +1286,21 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setValue(String(S.overloadPct)).onChange(async v => { const n = parseFloat(v); if (n > 0) { S.overloadPct = n; await save(); } }));
     new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks.")
       .addToggle(t => t.setValue(S.progressFromChecklist).onChange(async v => { S.progressFromChecklist = v; await save(); }));
-    new Setting(el).setName("dotpm tab project").setDesc("Project the dotpm tab opens on. Its sub-projects are included.")
+    new Setting(el).setName("dotpm tab project").setDesc("What the dotpm tab opens on.")
       .addDropdown(d => {
-        d.addOption("", "Top-level project (automatic)");
+        d.addOption("", "All projects");
         for (const k of Object.keys(p.projectNotes).sort()) d.addOption(k, p.projectNotes[k].title + (p.projectNotes[k].parent ? "" : " (top level)"));
         d.setValue(S.dotpmScope || "").onChange(async v => { S.dotpmScope = v; S.dotpmState = null; await p.saveSettings(); });
       });
+    new Setting(el).setName("Sort dotpm by due date").setDesc("Views dotpm hasn't been given a sort yet start sorted by due date, then priority. A sort you choose in dotpm is kept.")
+      .addToggle(t => t.setValue(S.dotpmDueSort).onChange(async v => { S.dotpmDueSort = v; await p.saveSettings(); if (v) await p.applyDotpmDueSort(); }));
+    new Setting(el).setName("Work type from project").setDesc("A task without a work type in a project named like a work type (IDSA, Fun, Misc…) gets that work type.")
+      .addToggle(t => t.setValue(S.workTypeFromProject).onChange(async v => { S.workTypeFromProject = v; await p.saveSettings(); }));
     new Setting(el).setName("Open on startup").setDesc("Open the companion on the dotpm tab when Obsidian starts.")
       .addToggle(t => t.setValue(S.openOnStartup).onChange(async v => { S.openOnStartup = v; await p.saveSettings(); }));
     new Setting(el).setName("Multipliers").setHeading();
     for (const k of V.typeKeys(p.cfg)) {
-      new Setting(el).setName(V.typeName(k)).addText(t => t.setValue(String(M.multiplierFor(S.multipliers, k))).onChange(v => {
+      new Setting(el).setName(V.typeName(k, p.cfg)).addText(t => t.setValue(String(M.multiplierFor(S.multipliers, k))).onChange(v => {
         const n = parseFloat(v); if (isFinite(n) && n > 0) p.setMultiplier(k, Math.round(n * 100) / 100);
       }));
     }

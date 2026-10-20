@@ -2,9 +2,9 @@
 
 An Obsidian plugin that sits beside [dotpm](https://dotpm.pm) and adds cross-project planning views. It reads dotpm's Markdown task files as the only source of truth and never renames, moves or re-IDs them.
 
-## Tabs (0.4.0)
+## Tabs (0.5.0)
 
-- **dotpm** (opens on startup): dotpm's own project view — its table, Gantt and Kanban, filters and editor — hosted inside the companion, opened on the top-level project so every sub-project's tasks show without the project menu. When dotpm switches scope it stays in this tab; other dotpm screens (overview, task editor) open in their own tab. If dotpm can't be hosted, an *Open dotpm* button opens it normally.
+- **dotpm** (opens on startup): dotpm's own project view — its table, Gantt and Kanban, filters and editor — hosted inside the companion, opened on all projects (dotpm's vault scope; pick one project in settings instead), so every task shows without the project menu. When dotpm switches scope it stays in this tab; other dotpm screens (overview, task editor) open in their own tab. If dotpm can't be hosted, an *Open dotpm* button opens it normally.
 - **Board**
   - *Today* (micro): open tasks that have started, ranked by priority, then due date, then remaining hours. ✓ marks done; *Done today* keeps Undo until midnight; *Find more tasks* suggests ready tasks (dependencies done) and *Start now* pulls one in, with *Undo add*.
   - *By week* (macro): a column per week; each card sits in the week it's due, in queue order, with committed vs available hours on the column. Drag or *Move…* shifts start and due by whole weeks.
@@ -12,6 +12,9 @@ An Obsidian plugin that sits beside [dotpm](https://dotpm.pm) and adds cross-pro
 - **Work types**: stacked hours per week by `work-type`, with the available-hours line and a table.
 - **Multipliers**: one per work-type (default 2.0×), change history and trend chart, with the measured factor (cumulative logged ÷ estimate of done tasks, by completion date) as a dashed line beside it.
 - **Progress from checklist**: progress = ticked share of the `## Done when` checklist.
+- **dotpm default sort**: any dotpm view still on dotpm's default (status) is switched once to due date, then priority. A sort you pick in dotpm afterwards is kept.
+- **Work type from project**: a task without a work type in a project named like a work type (IDSA, Fun, Misc…) gets that work type.
+- Work types that are on tasks but no longer in dotpm's list stay visible, marked "not in dotpm's list".
 
 ## How it writes
 

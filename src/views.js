@@ -36,11 +36,11 @@ function relDue(due, today) {
 }
 
 // Fixed categorical order = the work-type option order in dotpm. "No work-type" is neutral gray.
-function typeKeys(cfg) { return [...cfg.workTypes, M.NO_TYPE]; }
-function typeName(k) { return k === M.NO_TYPE ? "No work-type" : k; }
+function typeKeys(cfg) { return [...cfg.workTypes, ...(cfg.extraTypes || []), M.NO_TYPE]; }
+function typeName(k, cfg) { return k === M.NO_TYPE ? "No work-type" : cfg && (cfg.extraTypes || []).includes(k) ? `${k} (not in dotpm's list)` : k; }
 function typeColor(cfg, k) {
   const i = cfg.workTypes.indexOf(k);
-  return i === -1 || i > 7 ? "var(--dpc-none)" : `var(--dpc-s${i + 1})`;
+  return i === -1 ? "var(--dpc-none)" : i < 9 ? `var(--dpc-s${i + 1})` : "var(--dpc-none)";
 }
 
 // ---------- shell ----------
@@ -317,7 +317,7 @@ function renderTypes(body, st, on) {
       const d = `M${x},${yy + hgt} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + bw - r} Q${x + bw},${yy} ${x + bw},${yy + r} V${yy + hgt} Z`;
       const seg = s(doc, "path", { d, fill: typeColor(cfg, k), class: "dpc-seg-mark", tabindex: 0 });
       const show = e => {
-        tip.textContent = `${w.week.slice(5)} · ${typeName(k)}: ${fmtH(v)} of ${fmtH(totals[i])}`; tip.classList.add("is-on");
+        tip.textContent = `${w.week.slice(5)} · ${typeName(k, cfg)}: ${fmtH(v)} of ${fmtH(totals[i])}`; tip.classList.add("is-on");
         const r = seg.getBoundingClientRect();
         placeTip(tip, wrap, e && e.clientX != null ? e.clientX : r.right, e && e.clientY != null ? e.clientY : r.top + r.height / 2);
       };
@@ -334,7 +334,7 @@ function renderTypes(body, st, on) {
   body.append(legend(doc, cfg, present, true), wrap);
   // table view
   const t = h(doc, "table", { class: "dpc-table dpc-types-table" },
-    h(doc, "thead", {}, h(doc, "tr", {}, h(doc, "th", {}, "Week"), present.map(k => h(doc, "th", { class: "dpc-num" }, typeName(k))), h(doc, "th", { class: "dpc-num" }, "Total"), h(doc, "th", { class: "dpc-num" }, "Available"))),
+    h(doc, "thead", {}, h(doc, "tr", {}, h(doc, "th", {}, "Week"), present.map(k => h(doc, "th", { class: "dpc-num" }, typeName(k, cfg))), h(doc, "th", { class: "dpc-num" }, "Total"), h(doc, "th", { class: "dpc-num" }, "Available"))),
     h(doc, "tbody", {}, R.weeks.map((w, i) => h(doc, "tr", { class: w.isCurrent ? "is-current" : "" }, h(doc, "td", {}, w.week.slice(5)),
       present.map(k => h(doc, "td", { class: "dpc-num" }, w[field][k] ? fmtH(w[field][k]) : "")),
       h(doc, "td", { class: "dpc-num" }, fmtH(totals[i])), h(doc, "td", { class: "dpc-num dpc-muted" }, fmtH(w.available))))));
@@ -354,7 +354,7 @@ function placeTip(tip, wrap, clientX, clientY) {
 function niceStep(max) { const raw = max / 4; const p = Math.pow(10, Math.floor(Math.log10(raw))); const n = raw / p; return (n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10) * p; }
 function legend(doc, cfg, keys, withCap) {
   return h(doc, "div", { class: "dpc-legend" }, keys.map(k =>
-    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k))),
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k, cfg))),
     withCap ? h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), "Available") : null);
 }
 
@@ -366,10 +366,10 @@ function renderMultipliers(body, st, on) {
   const tb = h(doc, "tbody");
   for (const k of keys) {
     const m = R.measured[k];
-    const input = h(doc, "input", { type: "number", min: "0.1", max: "10", step: "0.1", value: String(M.multiplierFor(set.multipliers, k)), class: "dpc-mult-input", "aria-label": `${typeName(k)} multiplier` });
+    const input = h(doc, "input", { type: "number", min: "0.1", max: "10", step: "0.1", value: String(M.multiplierFor(set.multipliers, k)), class: "dpc-mult-input", "aria-label": `${typeName(k, cfg)} multiplier` });
     input.addEventListener("change", () => { const v = parseFloat(input.value); if (isFinite(v) && v > 0) on.setMultiplier(k, Math.round(v * 100) / 100); });
     tb.append(h(doc, "tr", {},
-      h(doc, "td", {}, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k)),
+      h(doc, "td", {}, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k, cfg)),
       h(doc, "td", {}, input, " ×"),
       h(doc, "td", { class: m ? "" : "dpc-muted" }, m ? `${fmtX(m.factor)} from ${m.n} done task${m.n === 1 ? "" : "s"}` : "no done tasks with time logs yet")));
   }
@@ -445,7 +445,7 @@ function trendChart(doc, body, cfg, history, keys, today, measuredSeries) {
     tip.replaceChildren(h(doc, "strong", {}, fmtD(day)), ...shown.map(k => {
       const v = M.multiplierOn(history, k, day);
       const ms = (measuredSeries[k] || []).filter(p => p.date <= day).pop();
-      return h(doc, "div", {}, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), `${typeName(k)}: ${v == null ? "—" : fmtX(v)}`,
+      return h(doc, "div", {}, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), `${typeName(k, cfg)}: ${v == null ? "—" : fmtX(v)}`,
         ms ? h(doc, "span", { class: "dpc-muted" }, ` · measured ${fmtX(ms.value)} (${ms.n})`) : null);
     }));
     tip.classList.add("is-on");
@@ -461,7 +461,7 @@ function trendChart(doc, body, cfg, history, keys, today, measuredSeries) {
   const changes = history.slice().reverse();
   wrap.append(h(doc, "details", { class: "dpc-details" }, h(doc, "summary", {}, `Change history (${changes.length})`),
     h(doc, "table", { class: "dpc-table" }, h(doc, "thead", {}, h(doc, "tr", {}, ["Date", "Work type", "Multiplier"].map(c => h(doc, "th", {}, c)))),
-      h(doc, "tbody", {}, changes.map(p => h(doc, "tr", {}, h(doc, "td", {}, fmtD(p.date)), h(doc, "td", {}, typeName(p.type)), h(doc, "td", {}, fmtX(p.value))))))));
+      h(doc, "tbody", {}, changes.map(p => h(doc, "tr", {}, h(doc, "td", {}, fmtD(p.date)), h(doc, "td", {}, typeName(p.type, cfg)), h(doc, "td", {}, fmtX(p.value))))))));
   return wrap;
 }
 

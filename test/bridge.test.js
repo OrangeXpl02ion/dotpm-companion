@@ -128,3 +128,38 @@ test("undo add also restores a due date that start-now moved", async () => {
   await p.undoStart(path);
   assert.deepEqual(calls.filter(c => c[0] === "updateTask").map(c => c[3])[1], { start: "2000-01-01", due: "2000-01-02" });
 });
+
+test("dotpm views on dotpm's default sort switch to due date once; chosen sorts are kept", async () => {
+  const { p } = make(true);
+  const pm = p.app.plugins.plugins["project-manager"];
+  let saved = 0;
+  pm.settings = { ganttGranularity: "week", defaultFields: {}, projectFilters: {
+    "project:A.md": { sort: [{ key: "status", dir: "asc" }] },
+    "project:B.md": { sort: [{ key: "progress", dir: "asc" }] } } };
+  pm.saveSettings = async () => { saved++; };
+  p.projectNotes = { "A.md": {}, "B.md": {}, "C.md": {} };
+  p.settings.dotpmDueSort = true; p.settings.dotpmSortSeen = [];
+  await p.applyDotpmDueSort();
+  const pf = pm.settings.projectFilters;
+  assert.deepEqual(pf["project:A.md"].sort, M.DUE_SORT);
+  assert.deepEqual(pf["project:B.md"].sort, [{ key: "progress", dir: "asc" }]);
+  assert.deepEqual(pf["project:C.md"].sort, M.DUE_SORT);
+  assert.deepEqual(pf.vault.sort, M.DUE_SORT);
+  assert.equal(saved, 1);
+  pf["project:A.md"].sort = [{ key: "status", dir: "asc" }]; // you set it back in dotpm
+  await p.applyDotpmDueSort();
+  assert.deepEqual(pf["project:A.md"].sort, [{ key: "status", dir: "asc" }], "not overridden a second time");
+});
+
+test("tasks in a project named like a work type get that work type", async () => {
+  const { p, calls } = make(true);
+  const path = "Project/K/_tasks/a.md";
+  p.cfg = M.readDotpmConfig({ customFields: [{ id: "wt", name: "work-type", options: ["CAD", "Fun", "IDSA"] }] });
+  p.settings.workTypeFromProject = true;
+  Object.assign(p.tasks.get(path), { project: "Fun", workType: null, customFields: { other: "x" } });
+  await p.applyProjectWorkType(path);
+  assert.deepEqual(calls[0][3], { customFields: { other: "x", wt: "Fun" } });
+  Object.assign(p.tasks.get(path), { project: "Kettle" });
+  await p.applyProjectWorkType(path);
+  assert.equal(calls.filter(c => c[0] === "updateTask").length, 1, "no matching work type → untouched");
+});

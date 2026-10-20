@@ -33,19 +33,20 @@ function setup(saved) {
   };
   realLeaf.app = app;
   const plugin = { settings: { dotpmState: saved || null, dotpmScope: "" }, saveSettings() { log.push(["save"]); }, projectNotes: { "Project/Fall 2026/Fall 2026.md": { title: "Fall 2026", parent: null }, "Project/Fall 2026/Portfolio/Portfolio.md": { title: "Portfolio", parent: "[[Project/Fall 2026/Fall 2026]]" } } };
-  plugin.rootProjectPath = Plugin.prototype.rootProjectPath.bind(plugin);
+  plugin.defaultScope = Plugin.prototype.defaultScope.bind(plugin);
+  plugin.validScope = Plugin.prototype.validScope.bind(plugin);
   const view = Object.create(CompanionView.prototype);
   Object.assign(view, { leaf: realLeaf, app, plugin, contentEl: { empty() {} }, scope: null, tab: "dotpm" });
   const host = { kids: [], append(x) { x.parent = this; this.kids.push(x); } };
   return { view, host, log, opened, realLeaf };
 }
 
-test("mounts dotpm's own view on the top-level project", async () => {
+test("mounts dotpm's own view on all projects", async () => {
   const { view, host, log } = setup();
   view.mountDotpm(host);
   await view.dotpmReady;
   assert.equal(host.kids.length, 1);
-  assert.deepEqual(log.filter(l => l[0] === "setState")[0][1], { scope: { kind: "project", path: "Project/Fall 2026/Fall 2026.md" } });
+  assert.deepEqual(log.filter(l => l[0] === "setState")[0][1], { scope: { kind: "vault" } });
   assert.ok(log.some(l => l[0] === "onOpen"));
   assert.equal(view.scope.name, "dotpm-keys", "dotpm's keyboard scope is active");
   assert.equal(view.dotpmView.containerEl.attrs["data-type"], "pm-project");
@@ -84,4 +85,16 @@ test("without dotpm it throws so the tab shows the fallback", () => {
   const { view, host } = setup();
   view.app.viewRegistry.viewByType = {};
   assert.throws(() => view.mountDotpm(host), /isn't registered/);
+});
+
+test("a remembered scope whose project was deleted falls back to all projects", async () => {
+  const { view, host, log } = setup({ scope: { kind: "project", path: "Project/Gone/Gone.md" } });
+  view.mountDotpm(host); await view.dotpmReady;
+  assert.deepEqual(log.filter(l => l[0] === "setState")[0][1], { scope: { kind: "vault" } });
+});
+
+test("picked scopes keep only projects that still exist", () => {
+  const { view } = setup();
+  assert.deepEqual(view.plugin.validScope({ kind: "picked", paths: ["Project/Gone/Gone.md", "Project/Fall 2026/Portfolio/Portfolio.md"] }), { kind: "picked", paths: ["Project/Fall 2026/Portfolio/Portfolio.md"] });
+  assert.equal(view.plugin.validScope({ kind: "picked", paths: ["Project/Gone/Gone.md"] }), null);
 });

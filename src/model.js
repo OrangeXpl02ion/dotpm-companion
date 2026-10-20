@@ -2,6 +2,9 @@
 // Pure calculations. No Obsidian imports, so this file is unit-tested in Node.
 
 const NO_TYPE = "__none";
+// dotpm's own default sort, and the companion's replacement (due date, then priority; dotpm ranks priority by list order).
+const DUE_SORT = [{ key: "due", dir: "asc" }, { key: "priority", dir: "asc" }];
+function isDefaultSort(sort) { return !Array.isArray(sort) || !sort.length || (sort.length === 1 && sort[0] && sort[0].key === "status" && sort[0].dir !== "desc"); }
 const DEFAULT_MULTIPLIER = 2;
 
 // ---------- dates (YYYY-MM-DD strings, UTC day arithmetic) ----------
@@ -100,6 +103,7 @@ function parseTask(path, fm, body, cfg) {
     progress: typeof fm.progress === "number" ? fm.progress : 0,
     checklist: parseChecklist(body),
     completed: normDate(fm.completed),
+    customFields: { ...cf },
     deps: Array.isArray(fm.dependencies) ? fm.dependencies.map(linkTarget).filter(Boolean) : [],
   };
 }
@@ -347,7 +351,7 @@ function setFrontmatterLines(text, fields) {
 
 module.exports = {
   bodyOf, setFrontmatterLines,
-  NO_TYPE, DEFAULT_MULTIPLIER,
+  NO_TYPE, DEFAULT_MULTIPLIER, DUE_SORT, isDefaultSort,
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,
   readDotpmConfig, isComplete, doneStatusId, priorityRank, label,
   linkText, parseChecklist, checklistProgress, parseTask,

@@ -19,6 +19,9 @@ const DEFAULTS = {
   multiplierHistory: [],
   lastTab: "dotpm",
   dotpmScope: "",
+  dotpmDueSort: true,
+  dotpmSortSeen: [],
+  workTypeFromProject: true,
   dotpmState: null,
   showDone: false,
   boardMode: "today",
@@ -62,7 +65,7 @@ class CompanionView extends ItemView {
     v.containerEl.setAttribute("data-type", "pm-project");
     host.append(v.containerEl);
     v.load();
-    const state = p.settings.dotpmState && p.settings.dotpmState.scope ? p.settings.dotpmState : { scope: { kind: "project", path: p.rootProjectPath() } };
+    const state = { scope: p.validScope(p.settings.dotpmState && p.settings.dotpmState.scope) || p.defaultScope() };
     this.dotpmReady = (async () => {
       await v.setState(state, { history: false });
       await v.onOpen();
@@ -144,6 +147,8 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.app.workspace.onLayoutReady(async () => {
       await this.reloadDotpmConfig();
       await this.rebuildIndex();
+      try { await this.applyDotpmDueSort(); } catch (e) { console.warn("[dotpm-companion] could not set dotpm's default sort", e); }
+      for (const t of this.taskList()) if (!t.workType) await this.applyProjectWorkType(t.path);
       this.registerEvent(this.app.metadataCache.on("changed", (file, data, cache) => this.onChanged(file, data, cache)));
       this.registerEvent(this.app.vault.on("delete", f => { if (this.tasks.delete(f.path)) this.scheduleRecompute(); if (f.path === this.settings.capacityFile) this.loadCapacity().then(() => this.scheduleRecompute()); }));
       this.registerEvent(this.app.vault.on("rename", (f, old) => { if (this.tasks.has(old)) { this.tasks.delete(old); this.indexFile(f).then(() => this.scheduleRecompute()); } }));
@@ -175,6 +180,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     try { this.cfg = M.readDotpmConfig(JSON.parse(await this.app.vault.adapter.read(p))); }
     catch (e) { console.warn("[dotpm-companion] could not read dotpm settings; using defaults", e); }
     if (M.ensureMultipliers(this.settings, V.typeKeys(this.cfg), M.localToday())) await this.saveSettings();
+    this.cfg.extraTypes = [];
   }
 
   inProjects(path) { return path.startsWith(this.cfg.projectsFolder) && path.endsWith(".md") && !path.includes("/Archive/"); }
@@ -210,10 +216,14 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const t = await this.indexFile(file, data);
     this.scheduleRecompute();
     if (t && this.settings.progressFromChecklist) this.queueProgress(file.path);
+    if (t && !t.workType) this.applyProjectWorkType(file.path);
+    if (!t && data && /^---[\s\S]*?pm-project: true/.test(data)) this.applyDotpmDueSort();
   }
 
   recompute() {
     const today = M.localToday();
+    // work types still on tasks but no longer in dotpm's list (e.g. a renamed option) stay visible
+    this.cfg.extraTypes = [...new Set(this.taskList().map(t => t.workType).filter(w => w && !this.cfg.workTypes.includes(w)))].sort();
     this.result = M.compute(this.taskList(), this.cfg, { ...this.settings, capacity: this.capacity }, today);
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) if (leaf.view instanceof CompanionView) leaf.view.refresh();
   }
@@ -246,7 +256,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     try { if (await this.updateViaDotpm(t.id, patch)) return; }
     catch (e) { console.warn("[dotpm-companion] dotpm update failed; editing the file instead", e); }
     const lines = {};
-    for (const k in patch) lines[k] = typeof patch[k] === "number" ? String(patch[k]) : JSON.stringify(patch[k]);
+    for (const k in patch) { if (typeof patch[k] === "object" && patch[k] !== null) return; lines[k] = typeof patch[k] === "number" ? String(patch[k]) : JSON.stringify(patch[k]); }
     const f = this.app.vault.getAbstractFileByPath(path);
     if (f instanceof TFile) await this.app.vault.process(f, text => M.setFrontmatterLines(text, lines));
   }
@@ -360,16 +370,57 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     await this.loadCapacity(); this.recompute();
     this.app.workspace.getLeaf(true).openFile(f);
   }
-  // Top-level project for the dotpm tab: the one chosen in settings, else the first project with no parent.
-  rootProjectPath() {
-    const notes = this.projectNotes;
-    if (this.settings.dotpmScope && notes[this.settings.dotpmScope]) return this.settings.dotpmScope;
-    const roots = Object.keys(notes).filter(k => !notes[k].parent).sort();
-    return roots[0] || Object.keys(notes).sort()[0] || "";
+  // dotpm tab scope: the project chosen in settings, else every project in the vault.
+  defaultScope() {
+    const p = this.settings.dotpmScope;
+    return p && this.projectNotes[p] ? { kind: "project", path: p } : { kind: "vault" };
+  }
+  // A remembered scope is only reused while its projects still exist.
+  validScope(sc) {
+    if (!sc || typeof sc !== "object") return null;
+    if (sc.kind === "vault") return sc;
+    if ((sc.kind === "project" || sc.kind === "subtree") && this.projectNotes[sc.path]) return sc;
+    if (sc.kind === "picked" && Array.isArray(sc.paths)) { const ok = sc.paths.filter(x => this.projectNotes[x]); return ok.length ? { kind: "picked", paths: ok } : null; }
+    return null;
   }
   async openDotpmInTab() {
     const leaf = this.app.workspace.getLeaf("tab");
-    await leaf.setViewState({ type: "pm-project", active: true, state: { scope: { kind: "project", path: this.rootProjectPath() } } });
+    await leaf.setViewState({ type: "pm-project", active: true, state: { scope: this.defaultScope() } });
+  }
+
+  // ---- dotpm default sort: due date, then priority ----
+  // dotpm starts every view sorted by status. For each scope the companion hasn't seen yet and that is
+  // still on dotpm's default, switch it to due → priority once; a sort you pick in dotpm afterwards is kept.
+  async applyDotpmDueSort() {
+    const pm = this.dotpm();
+    if (!this.settings.dotpmDueSort || !pm || !pm.settings || typeof pm.settings.projectFilters !== "object") return;
+    const pf = pm.settings.projectFilters;
+    const seen = new Set(this.settings.dotpmSortSeen || []);
+    const keys = new Set(["vault", ...Object.keys(this.projectNotes).map(k => `project:${k}`), ...Object.keys(pf)]);
+    let changed = false;
+    for (const key of keys) {
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const e = pf[key];
+      if (!e) {
+        pf[key] = { filter: { conditions: [], showArchived: false }, activeSavedViewId: null, sort: M.DUE_SORT.map(x => ({ ...x })), group: { field: "status" },
+          fields: structuredClone(pm.settings.defaultFields || {}), ganttGranularity: pm.settings.ganttGranularity || "week", nonWorkingDays: {} };
+        changed = true;
+      } else if (M.isDefaultSort(e.sort)) { e.sort = M.DUE_SORT.map(x => ({ ...x })); changed = true; }
+    }
+    this.settings.dotpmSortSeen = [...seen];
+    await this.saveSettings();
+    if (changed && typeof pm.saveSettings === "function") await pm.saveSettings();
+  }
+
+  // ---- default work-type from the project's name (IDSA, Fun, Misc…) ----
+  async applyProjectWorkType(path) {
+    if (!this.settings.workTypeFromProject || !this.cfg.workTypeFieldId) return;
+    const t = this.tasks.get(path);
+    if (!t || t.workType) return;
+    const wt = this.cfg.workTypes.find(x => x.toLowerCase() === String(t.project || "").toLowerCase());
+    if (!wt) return;
+    await this.updateTask(path, { customFields: { ...(t.customFields || {}), [this.cfg.workTypeFieldId]: wt } });
   }
   async activateView(tab) {
     if (tab) this.settings.lastTab = tab;
@@ -398,17 +449,21 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setValue(String(S.overloadPct)).onChange(async v => { const n = parseFloat(v); if (n > 0) { S.overloadPct = n; await save(); } }));
     new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks.")
       .addToggle(t => t.setValue(S.progressFromChecklist).onChange(async v => { S.progressFromChecklist = v; await save(); }));
-    new Setting(el).setName("dotpm tab project").setDesc("Project the dotpm tab opens on. Its sub-projects are included.")
+    new Setting(el).setName("dotpm tab project").setDesc("What the dotpm tab opens on.")
       .addDropdown(d => {
-        d.addOption("", "Top-level project (automatic)");
+        d.addOption("", "All projects");
         for (const k of Object.keys(p.projectNotes).sort()) d.addOption(k, p.projectNotes[k].title + (p.projectNotes[k].parent ? "" : " (top level)"));
         d.setValue(S.dotpmScope || "").onChange(async v => { S.dotpmScope = v; S.dotpmState = null; await p.saveSettings(); });
       });
+    new Setting(el).setName("Sort dotpm by due date").setDesc("Views dotpm hasn't been given a sort yet start sorted by due date, then priority. A sort you choose in dotpm is kept.")
+      .addToggle(t => t.setValue(S.dotpmDueSort).onChange(async v => { S.dotpmDueSort = v; await p.saveSettings(); if (v) await p.applyDotpmDueSort(); }));
+    new Setting(el).setName("Work type from project").setDesc("A task without a work type in a project named like a work type (IDSA, Fun, Misc…) gets that work type.")
+      .addToggle(t => t.setValue(S.workTypeFromProject).onChange(async v => { S.workTypeFromProject = v; await p.saveSettings(); }));
     new Setting(el).setName("Open on startup").setDesc("Open the companion on the dotpm tab when Obsidian starts.")
       .addToggle(t => t.setValue(S.openOnStartup).onChange(async v => { S.openOnStartup = v; await p.saveSettings(); }));
     new Setting(el).setName("Multipliers").setHeading();
     for (const k of V.typeKeys(p.cfg)) {
-      new Setting(el).setName(V.typeName(k)).addText(t => t.setValue(String(M.multiplierFor(S.multipliers, k))).onChange(v => {
+      new Setting(el).setName(V.typeName(k, p.cfg)).addText(t => t.setValue(String(M.multiplierFor(S.multipliers, k))).onChange(v => {
         const n = parseFloat(v); if (isFinite(n) && n > 0) p.setMultiplier(k, Math.round(n * 100) / 100);
       }));
     }
