@@ -116,6 +116,8 @@ and unaccepted invites. Keep the assumptions in the note above the table.
 | Write last week's spillover now | Writes the previous week's unfinished tasks to `Spillover.md`. |
 | Update progress from Done-when checklists (all tasks) | One-off sync of every task's progress. |
 | Create capacity file | Writes a `Capacity.md` template. |
+| **Show diagnostics** | What the companion sees on this device: version, dotpm loaded, projects folder, projects/tasks found, capacity weeks read. *Copy* puts it on the clipboard. |
+| Re-read all tasks | Rebuild the index (e.g. after a big sync). |
 
 ---
 
@@ -158,6 +160,7 @@ and unaccepted invites. Keep the assumptions in the note above the table.
 
 | Symptom | Fix |
 | --- | --- |
+| Tabs show 0h / no tasks on one device | Run **Show diagnostics** there. *Tasks found: 0* → press *Re-read all tasks*; still 0 → check *Projects folder* and *Markdown files in it* (Sync may not have finished). |
 | New version not showing | Run the BRAT update command, then toggle the plugin off/on. |
 | dotpm tab shows an error | Make sure dotpm is enabled; use *Open dotpm*; report the message. |
 | dotpm doesn't show a change | It should update at once; if not, the companion fell back to editing the file and waited 6 s for dotpm's self-write guard. Reopen the dotpm view. |

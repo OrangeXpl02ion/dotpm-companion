@@ -34,7 +34,7 @@ function make(withDotpm) {
   p.cfg = M.readDotpmConfig({});
   p.settings = { progressFromChecklist: true, undo: {}, pulled: {} };
   p.saveSettings = async () => {};
-  p.confirmDone = new Map(); p.reasons = new Map(); p.dates = new Map(); p.logGroup = []; p.projectNotes = {};
+  p.diag = { fromFile: 0 }; p.confirmDone = new Map(); p.reasons = new Map(); p.dates = new Map(); p.logGroup = []; p.projectNotes = {};
   const body = M.bodyOf(files["Project/K/_tasks/a.md"]);
   p.tasks = new Map([["Project/K/_tasks/a.md", M.parseTask("Project/K/_tasks/a.md", { "pm-task": true, id: "t1", status: "todo", progress: 0 }, body, p.cfg)]]);
   return { p, calls, files };

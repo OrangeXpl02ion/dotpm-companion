@@ -145,6 +145,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.capacity = {};
     this.result = null;
     this.pendingProgress = new Map();
+    this.diag = { fromFile: 0, dotpmConfig: "not read yet", lastIndex: null, files: 0 };
     this.dates = new Map(); this.reasons = new Map(); this.logGroup = []; this.logTimer = null; this.confirmDone = new Map();
     this.cfg = M.readDotpmConfig({});
     await this.loadSettings();
@@ -162,6 +163,8 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
       const f = this.app.workspace.getActiveFile(); const t = f && this.tasks.get(f.path);
       if (!t) return false; if (!checking) new LogTimeModal(this, t).open(); return true; } });
     this.addCommand({ id: "new-from-template", name: "New project from template", callback: () => this.templatePicker() });
+    this.addCommand({ id: "diagnostics", name: "Show diagnostics", callback: () => new DiagnosticsModal(this).open() });
+    this.addCommand({ id: "reindex", name: "Re-read all tasks", callback: async () => { await this.reloadDotpmConfig(); await this.rebuildIndex(); new Notice(`Re-read ${this.tasks.size} tasks.`); } });
     this.addCommand({ id: "write-spillover", name: "Write last week's spillover now", callback: () => this.writeSpillover(true) });
     this.addCommand({ id: "sync-progress", name: "Update progress from Done-when checklists (all tasks)", callback: () => this.syncAllProgress() });
     this.addSettingTab(new CompanionSettings(this.app, this));
@@ -206,8 +209,8 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
 
   async reloadDotpmConfig() {
     const p = normalizePath(this.app.vault.configDir + "/plugins/project-manager/data.json");
-    try { this.cfg = M.readDotpmConfig(JSON.parse(await this.app.vault.adapter.read(p))); }
-    catch (e) { console.warn("[dotpm-companion] could not read dotpm settings; using defaults", e); }
+    try { this.cfg = M.readDotpmConfig(JSON.parse(await this.app.vault.adapter.read(p))); this.diag.dotpmConfig = "read"; }
+    catch (e) { this.diag.dotpmConfig = `not found (${String(e && e.message || e).slice(0, 80)}) — using defaults`; console.warn("[dotpm-companion] could not read dotpm settings; using defaults", e); }
     if (M.ensureMultipliers(this.settings, V.typeKeys(this.cfg), M.localToday())) await this.saveSettings();
     this.cfg.extraTypes = [];
   }
@@ -223,6 +226,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     if (!fm) {
       text = text != null ? text : await this.app.vault.cachedRead(file);
       fm = M.frontmatterOf(text, typeof parseYaml === "function" ? parseYaml : null);
+      if (fm) this.diag.fromFile++;
     }
     if (fm && fm["pm-project"] === true && typeof fm.title === "string") {
       this.projectColors[fm.title] = typeof fm.color === "string" ? fm.color : null;
@@ -242,7 +246,9 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.tasks.clear();
     this.dates = new Map(); this.indexing = true;
     const files = this.app.vault.getMarkdownFiles().filter(f => this.inProjects(f.path));
+    this.diag.fromFile = 0; this.diag.files = files.length;
     await Promise.all(files.map(f => this.indexFile(f)));
+    this.diag.lastIndex = new Date().toLocaleTimeString();
     this.indexing = false;
     await this.loadCapacity();
     this.recompute();
@@ -647,6 +653,8 @@ class CompanionSettings extends PluginSettingTab {
     const { containerEl: el } = this, p = this.plugin, S = p.settings;
     el.empty();
     const save = async () => { await p.saveSettings(); await p.loadCapacity(); p.recompute(); };
+    new Setting(el).setName("Diagnostics").setDesc(`Version ${p.manifest && p.manifest.version} · ${p.tasks.size} tasks and ${Object.keys(p.projectNotes).length} projects found in ${p.cfg.projectsFolder}`)
+      .addButton(b => b.setButtonText("Show").onClick(() => new DiagnosticsModal(p).open()));
     new Setting(el).setName("Capacity file").setDesc("Markdown table with a Week column (2026-W43) and an Available hours column.")
       .addText(t => t.setValue(S.capacityFile).onChange(async v => { S.capacityFile = v.trim() || DEFAULTS.capacityFile; await save(); }));
     new Setting(el).setName("Default hours per week").setDesc("Used for any week missing from the capacity file.")
@@ -782,6 +790,39 @@ class TemplateModal extends Modal {
       if (!M.isDate(start)) { new Notice("Start date must look like 2026-11-02."); return; }
       try { await p.createFromTemplate(this.file, title, start, parent || null); this.close(); } catch (err) { new Notice(String(err.message || err)); }
     }));
+  }
+  onClose() { this.contentEl.empty(); }
+}
+
+class DiagnosticsModal extends Modal {
+  constructor(plugin) { super(plugin.app); this.plugin = plugin; }
+  onOpen() {
+    const p = this.plugin, el = this.contentEl, ts = p.taskList();
+    el.addClass("dpc-modal");
+    el.createEl("h3", { text: "dotpm Companion diagnostics" });
+    const caps = Object.keys(p.capacity || {}).length;
+    const rows = [
+      ["Version", p.manifest && p.manifest.version],
+      ["Device", Platform && Platform.isMacOS ? "Mac" : Platform && Platform.isWin ? "Windows" : Platform && Platform.isMobile ? "Mobile" : "Other"],
+      ["dotpm plugin loaded", p.dotpm() ? "yes" : "NO — enable dotpm"],
+      ["dotpm settings", p.diag.dotpmConfig],
+      ["Projects folder", p.cfg.projectsFolder],
+      ["Markdown files in it", String(p.diag.files)],
+      ["Projects found", String(Object.keys(p.projectNotes).length)],
+      ["Tasks found", String(ts.length)],
+      ["…with an estimate / a due date", `${ts.filter(t => t.estimate > 0).length} / ${ts.filter(t => t.due).length}`],
+      ["…read from the file (cache not ready)", String(p.diag.fromFile)],
+      ["Work-type field", p.cfg.workTypeFieldId ? `${p.cfg.workTypeFieldId} (${p.cfg.workTypes.length} options)` : "not found"],
+      ["Capacity weeks read", `${caps} from ${p.settings.capacityFile}`],
+      ["Planning range", `${p.settings.rangeStart} → ${p.settings.rangeEnd}`],
+      ["Last read", p.diag.lastIndex || "never"],
+      ["Logs written here", p.isLogDevice() ? "yes" : "no"],
+    ];
+    const tbl = el.createEl("table", { cls: "dpc-table" });
+    for (const [k, v] of rows) { const tr = tbl.createEl("tr"); tr.createEl("td", { text: k }); tr.createEl("td", { text: String(v) }); }
+    const text = rows.map(([k, v]) => `${k}: ${v}`).join("\n");
+    new Setting(el).addButton(b => b.setButtonText("Copy").onClick(() => { navigator.clipboard.writeText(text); new Notice("Copied diagnostics."); }))
+      .addButton(b => b.setButtonText("Re-read all tasks").setCta().onClick(async () => { await p.reloadDotpmConfig(); await p.rebuildIndex(); this.close(); new DiagnosticsModal(p).open(); }));
   }
   onClose() { this.contentEl.empty(); }
 }
