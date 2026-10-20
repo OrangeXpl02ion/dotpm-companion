@@ -242,3 +242,9 @@ test("spillover and templates", () => {
   assert.deepEqual([rows[3].title, rows[3].start, rows[3].due, rows[3].after], ["CAD", "2026-11-11", "2026-11-17", ["Form concepting"]]);
   assert.equal(M.prependRows(M.prependRows("", M.SCHEDULE_HEADER, ["| 1 |"]), M.SCHEDULE_HEADER, ["| 2 |"]).split("| --- | --- | --- | --- | --- |\n")[1], "| 2 |\n| 1 |\n");
 });
+
+test("work type is found by value when this device's field id differs", () => {
+  const other = M.readDotpmConfig({ ...fx.dotpm, customFields: [{ id: "differentid", name: "work-type", options: cfg.workTypes }] });
+  const k = M.parseTask("x.md", { "pm-task": true, title: "x", customFields: { "9as32nw7mvg3hsfb": "CAD" } }, "", other);
+  assert.equal(k.workType, "CAD");
+});

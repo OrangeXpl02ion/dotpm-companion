@@ -84,7 +84,10 @@ function parseTask(path, fm, body, cfg) {
     .filter(l => l && typeof l.hours === "number" && isFinite(l.hours))
     .map(l => ({ date: normDate(l.date), hours: l.hours })) : [];
   const cf = fm.customFields && typeof fm.customFields === "object" ? fm.customFields : {};
-  const wt = cfg.workTypeFieldId ? cf[cfg.workTypeFieldId] : undefined;
+  // Normally keyed by dotpm's field id; if that id differs on this device (dotpm settings not synced),
+  // fall back to any custom-field value that is one of the work-type options.
+  let wt = cfg.workTypeFieldId ? cf[cfg.workTypeFieldId] : undefined;
+  if (wt == null && cfg.workTypes.length) wt = Object.values(cf).find(v => typeof v === "string" && cfg.workTypes.includes(v));
   const est = typeof fm.timeEstimate === "number" && isFinite(fm.timeEstimate) ? fm.timeEstimate : null;
   return {
     path,

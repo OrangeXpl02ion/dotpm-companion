@@ -88,7 +88,10 @@ function parseTask(path, fm, body, cfg) {
     .filter(l => l && typeof l.hours === "number" && isFinite(l.hours))
     .map(l => ({ date: normDate(l.date), hours: l.hours })) : [];
   const cf = fm.customFields && typeof fm.customFields === "object" ? fm.customFields : {};
-  const wt = cfg.workTypeFieldId ? cf[cfg.workTypeFieldId] : undefined;
+  // Normally keyed by dotpm's field id; if that id differs on this device (dotpm settings not synced),
+  // fall back to any custom-field value that is one of the work-type options.
+  let wt = cfg.workTypeFieldId ? cf[cfg.workTypeFieldId] : undefined;
+  if (wt == null && cfg.workTypes.length) wt = Object.values(cf).find(v => typeof v === "string" && cfg.workTypes.includes(v));
   const est = typeof fm.timeEstimate === "number" && isFinite(fm.timeEstimate) ? fm.timeEstimate : null;
   return {
     path,
@@ -2013,6 +2016,9 @@ class DiagnosticsModal extends Modal {
       ["…with an estimate / a due date", `${ts.filter(t => t.estimate > 0).length} / ${ts.filter(t => t.due).length}`],
       ["…read from the file (cache not ready)", String(p.diag.fromFile)],
       ["Work-type field", p.cfg.workTypeFieldId ? `${p.cfg.workTypeFieldId} (${p.cfg.workTypes.length} options)` : "not found"],
+      ["Tasks using that field id", (() => { const n = ts.filter(t => t.customFields && p.cfg.workTypeFieldId in t.customFields).length; const k = new Set(ts.flatMap(t => Object.keys(t.customFields || {}))); return `${n} of ${ts.length}${n < ts.length && k.size ? ` (tasks use: ${[...k].join(", ")})` : ""}`; })()],
+      ["Open tasks / remaining hours", `${ts.filter(t => !M.isComplete(p.cfg, t.status)).length} / ${Math.round(ts.filter(t => !M.isComplete(p.cfg, t.status)).reduce((a, t) => a + M.remaining(t), 0))}h`],
+      ["Hours in planning range", p.result ? `${Math.round(p.result.weeks.reduce((a, w) => a + w.raw, 0))}h raw` : "not computed"],
       ["Capacity weeks read", `${caps} from ${p.settings.capacityFile}`],
       ["Planning range", `${p.settings.rangeStart} → ${p.settings.rangeEnd}`],
       ["Last read", p.diag.lastIndex || "never"],
