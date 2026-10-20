@@ -44,7 +44,7 @@ function typeColor(cfg, k) {
 }
 
 // ---------- shell ----------
-const TABS = [["dotpm", "dotpm"], ["board", "Board"], ["projects", "Projects"], ["capacity", "Capacity"], ["types", "Work types"], ["categories", "Categories"], ["multipliers", "Multipliers"]];
+const TABS = [["dotpm", "dotpm"], ["board", "Board"], ["projects", "Projects"], ["capacity", "Capacity"], ["types", "Work types"], ["multipliers", "Multipliers"]];
 function render(root, st, on) {
   const doc = root.ownerDocument;
   root.replaceChildren();
@@ -53,7 +53,7 @@ function render(root, st, on) {
   const bar = h(doc, "div", { class: "dpc-bar" },
     h(doc, "div", { class: "dpc-tabs", role: "tablist" }, TABS.map(([id, name]) =>
       h(doc, "button", { class: "dpc-tab" + (st.tab === id ? " is-active" : ""), role: "tab", "aria-selected": st.tab === id, onclick: () => on.setTab(id) }, name))),
-    (st.tab === "board" && st.settings.boardMode !== "week") || st.tab === "types" || st.tab === "categories"
+    (st.tab === "board" && st.settings.boardMode !== "week") || st.tab === "types"
       ? h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Hours shown" },
           [["adj", "× multipliers"], ["raw", "Raw estimates"]].map(([id, name]) =>
             h(doc, "button", { class: "dpc-seg-btn" + (st.mode === id ? " is-active" : ""), "aria-pressed": st.mode === id, onclick: () => on.setMode(id) }, name)))
@@ -63,7 +63,7 @@ function render(root, st, on) {
   if (!st.result) { root.append(h(doc, "p", { class: "dpc-muted" }, "Reading tasks…")); return; }
   const body = h(doc, "div", { class: "dpc-body" });
   root.append(body);
-  ({ board: renderBoard, projects: renderProjects, capacity: renderCapacity, types: renderTypes, categories: renderCategories, multipliers: renderMultipliers }[st.tab] || renderBoard)(body, st, on);
+  ({ board: renderBoard, projects: renderProjects, capacity: renderCapacity, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderBoard)(body, st, on);
 }
 
 function taskLink(doc, t, on) {
@@ -388,11 +388,25 @@ function card(doc, t, st, on, mode, targets) {
 
 // ---------- work types / categories (stacked bars per week) ----------
 function renderTypes(body, st, on) {
-  const cfg = st.cfg;
+  const doc = body.ownerDocument, set = st.settings;
+  const view = set.typesView === "category" ? "category" : "type";
+  const sub = set.showSubprojects !== false;
+  body.append(h(doc, "div", { class: "dpc-toolbar" },
+    h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Split hours by" }, [["type", "By work type"], ["category", "By category"]].map(([id, name]) =>
+      h(doc, "button", { class: "dpc-seg-btn" + (view === id ? " is-active" : ""), "aria-pressed": view === id, onclick: () => on.setTypesView(id) }, name))),
+    view === "category"
+      ? h(doc, "label", { class: "dpc-check", title: "Split each category into its sub-projects" },
+          h(doc, "input", { type: "checkbox", checked: sub, onchange: e => on.setSubprojects(e.target.checked) }), "Show sub-projects")
+      : null,
+    h(doc, "span", { class: "dpc-muted" }, view === "category"
+      ? (sub ? "Each sub-project is a shade of its category's color." : "One segment per top-level project (Studio, Portfolio, each class…).")
+      : "Committed hours per week by work type.")));
+  if (view === "category") { renderCategories(body, st, on, sub); return; }
+  const cfg = st.cfg, field = st.mode === "raw" ? "rawByType" : "byType";
   renderStacked(body, st, {
-    keys: typeKeys(cfg), field: st.mode === "raw" ? "rawByType" : "byType",
+    keys: typeKeys(cfg), val: (w, k) => w[field][k] || 0,
     color: k => typeColor(cfg, k), name: k => typeName(k, cfg), what: "work type",
-    legend: present => legend(body.ownerDocument, cfg, present, true),
+    legend: present => legend(doc, cfg, present, true),
   });
 }
 
@@ -423,12 +437,15 @@ function categoryPalette(st) {
   }
   return { groups, color, name, group };
 }
-function renderCategories(body, st, on) {
+function renderCategories(body, st, on, sub) {
   const doc = body.ownerDocument, P = categoryPalette(st);
-  const keys = P.groups.flatMap(g => g.members.map(m => m.key));
   const field = st.mode === "raw" ? "rawByProject" : "byProject";
-  renderStacked(body, st, {
-    keys, field, color: k => P.color[k] || "var(--dpc-none)", what: "project",
+  const groupSum = (w, g) => g.members.reduce((a, m) => a + (w[field][m.key] || 0), 0);
+  const byKey = Object.fromEntries(P.groups.map(g => [g.key, g]));
+  const avail = h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), "Available");
+  const o = sub ? {
+    keys: P.groups.flatMap(g => g.members.map(m => m.key)), val: (w, k) => w[field][k] || 0,
+    color: k => P.color[k] || "var(--dpc-none)",
     name: k => { const g = P.group[k]; const n = P.name[k] || k; return g && g.title !== n && !n.startsWith(g.title + " (") ? `${g.title} › ${n}` : n; },
     legend: present => h(doc, "div", { class: "dpc-legend dpc-legend-groups" },
       P.groups.filter(g => g.members.some(m => present.includes(m.key))).map(g =>
@@ -436,27 +453,32 @@ function renderCategories(body, st, on) {
           h(doc, "span", { class: "dpc-legend-cat" }, h(doc, "span", { class: "dpc-swatch", style: `background:${g.base}` }), g.title),
           g.members.filter(m => present.includes(m.key) && !(g.members.length === 1 && m.key === g.key)).map(m =>
             h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${P.color[m.key]}` }), P.name[m.key])))),
-      h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), "Available")),
-    // table: one column per category with its sub-projects folded in, hover a header for the split
-    table: (present, totals) => {
-      const R = st.result;
-      const gs = P.groups.filter(g => g.members.some(m => present.includes(m.key)));
-      const sum = (w, g) => g.members.reduce((a, m) => a + (w[field][m.key] || 0), 0);
-      return h(doc, "table", { class: "dpc-table dpc-types-table" },
-        h(doc, "thead", {}, h(doc, "tr", {}, h(doc, "th", {}, "Week"),
-          gs.map(g => h(doc, "th", { class: "dpc-num", title: g.members.filter(m => present.includes(m.key)).map(m => P.name[m.key]).join(", ") }, g.title)),
-          h(doc, "th", { class: "dpc-num" }, "Total"), h(doc, "th", { class: "dpc-num" }, "Available"))),
-        h(doc, "tbody", {}, R.weeks.map((w, i) => h(doc, "tr", { class: w.isCurrent ? "is-current" : "" }, h(doc, "td", {}, w.week.slice(5)),
-          gs.map(g => { const v = sum(w, g); return h(doc, "td", { class: "dpc-num" }, v > 0.05 ? fmtH(v) : ""); }),
-          h(doc, "td", { class: "dpc-num" }, fmtH(totals[i])), h(doc, "td", { class: "dpc-num dpc-muted" }, fmtH(w.available))))));
-    },
-  });
+      avail),
+  } : {
+    keys: P.groups.map(g => g.key), val: (w, k) => groupSum(w, byKey[k]),
+    color: k => byKey[k].base, name: k => byKey[k].title,
+    legend: present => h(doc, "div", { class: "dpc-legend" }, present.map(k =>
+      h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${byKey[k].base}` }), byKey[k].title)), avail),
+  };
+  // the table always totals per category; hover a header for its sub-projects
+  o.table = (present, totals) => {
+    const R = st.result;
+    const gs = P.groups.filter(g => g.members.some(m => R.weeks.some(w => (w[field][m.key] || 0) > 0.05)));
+    return h(doc, "table", { class: "dpc-table dpc-types-table" },
+      h(doc, "thead", {}, h(doc, "tr", {}, h(doc, "th", {}, "Week"),
+        gs.map(g => h(doc, "th", { class: "dpc-num", title: g.members.map(m => P.name[m.key]).join(", ") }, g.title)),
+        h(doc, "th", { class: "dpc-num" }, "Total"), h(doc, "th", { class: "dpc-num" }, "Available"))),
+      h(doc, "tbody", {}, R.weeks.map((w, i) => h(doc, "tr", { class: w.isCurrent ? "is-current" : "" }, h(doc, "td", {}, w.week.slice(5)),
+        gs.map(g => { const v = groupSum(w, g); return h(doc, "td", { class: "dpc-num" }, v > 0.05 ? fmtH(v) : ""); }),
+        h(doc, "td", { class: "dpc-num" }, fmtH(totals[i])), h(doc, "td", { class: "dpc-num dpc-muted" }, fmtH(w.available))))));
+  };
+  renderStacked(body, st, { ...o, what: sub ? "project" : "category" });
 }
 
 function renderStacked(body, st, o) {
-  const doc = body.ownerDocument, R = st.result, field = o.field;
-  const present = o.keys.filter(k => R.weeks.some(w => (w[field][k] || 0) > 0.05));
-  const totals = R.weeks.map(w => present.reduce((a, k) => a + (w[field][k] || 0), 0));
+  const doc = body.ownerDocument, R = st.result, val = o.val;
+  const present = o.keys.filter(k => R.weeks.some(w => val(w, k) > 0.05));
+  const totals = R.weeks.map(w => present.reduce((a, k) => a + val(w, k), 0));
   const maxV = Math.max(1, ...totals, ...R.weeks.map(w => w.available));
   const W = Math.max(320, Math.min(760, (body.clientWidth || 640))), H = 240, padL = 40, padR = 8, padT = 12, padB = 28;
   const cw = (W - padL - padR) / R.weeks.length, bw = Math.min(44, cw * 0.62);
@@ -473,9 +495,9 @@ function renderStacked(body, st, o) {
   R.weeks.forEach((w, i) => {
     const cx = padL + cw * i + cw / 2, x = cx - bw / 2;
     let acc = 0;
-    const segs = present.filter(k => (w[field][k] || 0) > 0.05);
+    const segs = present.filter(k => val(w, k) > 0.05);
     segs.forEach((k, j) => {
-      const v = w[field][k], y0 = y(acc), y1 = y(acc + v), top = j === segs.length - 1;
+      const v = val(w, k), y0 = y(acc), y1 = y(acc + v), top = j === segs.length - 1;
       const hgt = Math.max(0, y0 - y1 - (j > 0 ? 2 : 0));
       const yy = y1;
       const r = top ? Math.min(4, hgt, bw / 2) : 0;
@@ -500,7 +522,7 @@ function renderStacked(body, st, o) {
   const t = o.table ? o.table(present, totals) : h(doc, "table", { class: "dpc-table dpc-types-table" },
     h(doc, "thead", {}, h(doc, "tr", {}, h(doc, "th", {}, "Week"), present.map(k => h(doc, "th", { class: "dpc-num" }, o.name(k))), h(doc, "th", { class: "dpc-num" }, "Total"), h(doc, "th", { class: "dpc-num" }, "Available"))),
     h(doc, "tbody", {}, R.weeks.map((w, i) => h(doc, "tr", { class: w.isCurrent ? "is-current" : "" }, h(doc, "td", {}, w.week.slice(5)),
-      present.map(k => h(doc, "td", { class: "dpc-num" }, w[field][k] ? fmtH(w[field][k]) : "")),
+      present.map(k => h(doc, "td", { class: "dpc-num" }, val(w, k) > 0.05 ? fmtH(val(w, k)) : "")),
       h(doc, "td", { class: "dpc-num" }, fmtH(totals[i])), h(doc, "td", { class: "dpc-num dpc-muted" }, fmtH(w.available))))));
   body.append(h(doc, "details", { class: "dpc-details" }, h(doc, "summary", {}, "Table"), t));
 }

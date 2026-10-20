@@ -7,8 +7,9 @@ cases=[
  ("queue_light",dict(tab="queue")),
  ("types_light",dict(tab="types")),
  ("types_dark",dict(tab="types",dark=True)),
- ("categories_light",dict(tab="categories")),
- ("categories_dark",dict(tab="categories",dark=True)),
+ ("categories_light",dict(tab="types",settings=dict(typesView="category"))),
+ ("categories_dark",dict(tab="types",dark=True,settings=dict(typesView="category"))),
+ ("categories_top",dict(tab="types",settings=dict(typesView="category",showSubprojects=False))),
  ("mult_light",dict(tab="multipliers",today="2026-11-20",changes=[["2026-10-27","CAD",1.8],["2026-11-03","CAD",1.6],["2026-11-03","Writing",1.4],["2026-11-10","Render",1.5],["2026-11-17","Writing",1.2]])),
  ("mult_dark",dict(tab="multipliers",dark=True)),
 ]

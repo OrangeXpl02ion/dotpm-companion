@@ -73,7 +73,7 @@ and *New project from template* commands, which go through dotpm itself.
 | **Projects** | A card per project like dotpm's overview: progress vs plan, tasks done, overdue, time logged/estimate, milestones, and a Tasks dropdown. Sub-projects nest and roll up. Behind/at-risk first. |
 | **Capacity** | Weekly committed hours (raw and × multipliers) vs `Capacity.md`; overloaded weeks; at-risk tasks; tasks waiting on an overdue task; last week's spillover. |
 | **Work types** | Stacked hours per week by work type, with a table. |
-| **Categories** | The same stacked hours split by project: each top-level project (Studio, Portfolio, each class…) gets one color and its sub-projects are shades of it. The table totals each category. |
+| **Work types → By category** | The same stacked hours split by project (switch at the top of Work types): each top-level project (Studio, Portfolio, each class…) gets one color and its sub-projects are shades of it. Untick *Show sub-projects* for one segment per category. The table totals each category. |
 | **Multipliers** | One multiplier per work type (default 2.0×), change history, trend chart with the measured factor (logged ÷ estimate of done tasks) as dashed lines. |
 
 ### How the numbers are computed

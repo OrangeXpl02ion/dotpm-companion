@@ -229,3 +229,5 @@
 .dpc-legend-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
 .dpc-legend-cat { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--text-normal); min-width: 9em; }
 .dpc-legend-cat .dpc-swatch { margin-right: 0; }
+.dpc-check { display: inline-flex; align-items: center; gap: 6px; color: var(--text-normal); cursor: pointer; white-space: nowrap; }
+.dpc-check input { margin: 0; }

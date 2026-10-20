@@ -32,6 +32,8 @@ const DEFAULTS = {
   dotpmState: null,
   showDone: false,
   boardMode: "today",
+  typesView: "type",
+  showSubprojects: true,
   undo: {},
   pulled: {},
   openOnStartup: true,
@@ -39,7 +41,7 @@ const DEFAULTS = {
 };
 
 class CompanionView extends ItemView {
-  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = ({ tasks: "dotpm", queue: "board" })[plugin.settings.lastTab] || plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; this.openProjects = new Set();
+  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = ({ tasks: "dotpm", queue: "board", categories: "types" })[plugin.settings.lastTab] || plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; this.openProjects = new Set();
     // N opens Quick add while this tab is active (outside the hosted dotpm view, which has its own keys).
     if (typeof Scope === "function") {
       this.ownScope = new Scope(this.app.scope);
@@ -142,6 +144,8 @@ class CompanionView extends ItemView {
       openProjectNote: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
       moveCard: (path, key) => p.moveCard(path, key),
       setBoardMode: m => { p.settings.boardMode = m; p.saveSettings(); this.refresh(); },
+      setTypesView: m => { p.settings.typesView = m; p.saveSettings(); this.refresh(); },
+      setSubprojects: v => { p.settings.showSubprojects = !!v; p.saveSettings(); this.refresh(); },
       toggleMore: () => { this.showMore = !this.showMore; this.refresh(); },
       setMultiplier: (k, v) => p.setMultiplier(k, v),
       createCapacity: () => p.createCapacityFile(),
