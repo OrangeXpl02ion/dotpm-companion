@@ -303,8 +303,24 @@ function compute(tasks, cfg, settings, today) {
     .sort((a, b) => priorityRank(cfg, a.priority) - priorityRank(cfg, b.priority) || a.start.localeCompare(b.start) || (a.due || "9999").localeCompare(b.due || "9999"));
   const doneToday = tasks.filter(t => isComplete(cfg, t.status) && t.completed === today).sort((a, b) => a.title.localeCompare(b.title));
   const blocked = new Set(open.filter(t => !ready(t)).map(t => t.path));
+  // waiting on an overdue task: an unfinished dependency whose due date has passed
+  const waiting = {};
+  for (const t of open) {
+    const late = (t.deps || []).map(d => byName.get(d)).filter(x => x && !isComplete(cfg, x.status) && x.due && x.due < today);
+    if (late.length) waiting[t.path] = late;
+  }
+  // next 7 days: committed hours (× multipliers) per day against that day's share of the week
+  const days = [];
+  for (let i = 0; i < 7; i++) days.push({ date: addDays(today, i), adj: 0, available: availableOnDay(cap, addDays(today, i), fallback) });
+  const dayIdx = Object.fromEntries(days.map((d, i) => [d.date, i]));
+  for (const t of open) {
+    const raw = remaining(t); if (raw <= 0) continue;
+    const s = spread(t, raw, today); if (!s) continue;
+    const f = adjusted(t, mults) / raw;
+    for (const [d, hh] of s) if (d in dayIdx) days[dayIdx[d]].adj += hh * f;
+  }
   return { today, weeks, risk, queue, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
-    candidates, doneToday, blocked, board: board(open, cfg, settings, weeks, today) };
+    candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today) };
 }
 
 // Board columns. By week: the week a task is due (overdue, this week onward, later, no due date).
@@ -334,6 +350,242 @@ function shiftToWeek(t, weekStart) {
   return out;
 }
 
+
+// ---------- projects (progress tracker) ----------
+// projects: [{ path, title, icon, color, parent: "[[Project/…/X]]", description }]
+function parentPath(link) { const m = typeof link === "string" && link.match(/^\[\[([^\]|]+)(?:\|[^\]]*)?\]\]$/); return m ? m[1].replace(/\.md$/, "") + ".md" : null; }
+function projectTree(projects) {
+  const byPath = new Map(projects.map(p => [p.path, { ...p, children: [] }]));
+  const roots = [];
+  for (const p of byPath.values()) {
+    const pp = parentPath(p.parent);
+    if (pp && byPath.has(pp) && pp !== p.path) byPath.get(pp).children.push(p); else roots.push(p);
+  }
+  const sort = list => { list.sort((a, b) => a.title.localeCompare(b.title)); for (const x of list) sort(x.children); };
+  sort(roots);
+  return roots;
+}
+function taskShare(t, cfg) { return isComplete(cfg, t.status) ? 1 : Math.max(0, Math.min(1, (t.progress || 0) / 100)); }
+// How far along a task should be by today: share of its start→due window that has passed.
+function plannedShare(t, today) {
+  if (!t.due) return null;
+  const s = t.start || t.due;
+  if (today >= t.due) return 1;
+  if (today < s) return 0;
+  return (diffDays(s, today) + 1) / (diffDays(s, t.due) + 1);
+}
+function projectStats(node, tasks, cfg, today, risk) {
+  const own = tasks.filter(t => t.project === node.title);
+  const kids = node.children.map(c => projectStats(c, tasks, cfg, today, risk));
+  const all = own.concat(...kids.map(k => k.all));
+  const done = all.filter(t => isComplete(cfg, t.status)).length;
+  const open = all.filter(t => !isComplete(cfg, t.status));
+  // weights: estimate when known, else 1
+  const w = t => (t.estimate > 0 ? t.estimate : 1);
+  const W = all.reduce((a, t) => a + w(t), 0);
+  const actual = W ? all.reduce((a, t) => a + w(t) * taskShare(t, cfg), 0) / W : 0;
+  const dated = all.filter(t => t.due);
+  const WD = dated.reduce((a, t) => a + w(t), 0);
+  const planned = WD ? dated.reduce((a, t) => a + w(t) * plannedShare(t, today), 0) / WD : null;
+  const overdue = open.filter(t => t.due && t.due < today);
+  const atRisk = open.filter(t => risk && risk[t.path]);
+  const milestones = all.filter(t => t.type === "milestone").sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"))
+    .map(t => ({ task: t, state: isComplete(cfg, t.status) ? "done" : t.due && t.due < today ? "missed" : "upcoming" }));
+  const nextDue = open.filter(t => t.due && t.due >= today).sort((a, b) => a.due.localeCompare(b.due))[0] || null;
+  const lastDue = dated.map(t => t.due).sort().pop() || null;
+  const gap = planned == null ? 0 : actual - planned;
+  const health = !all.length ? "empty" : !open.length ? "done" : overdue.length || gap < -0.25 ? "behind" : atRisk.length || gap < -0.1 ? "watch" : "on-track";
+  return {
+    node, own, all, kids, total: all.length, done, open: open.length, actual, planned, gap, health,
+    overdue, atRisk, milestones, nextDue, lastDue,
+    logged: all.reduce((a, t) => a + t.logged, 0), estimate: all.reduce((a, t) => a + (t.estimate || 0), 0),
+  };
+}
+
+// ---------- quick-add ----------
+const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const MONTHS3 = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+function weekdayOf(d) { return new Date(toDay(d) * DAY).getUTCDay(); }
+function nextWeekday(today, idx) { const n = (idx - weekdayOf(today) + 7) % 7; return addDays(today, n); }
+function dateFromMonthDay(today, m, d) {
+  const y = Number(today.slice(0, 4));
+  const pad = n => String(n).padStart(2, "0");
+  let s = `${y}-${pad(m)}-${pad(d)}`;
+  if (!isDate(s) || isNaN(toDay(s))) return null;
+  if (s < addDays(today, -60)) s = `${y + 1}-${pad(m)}-${pad(d)}`; // "jan 5" in December means next year
+  return s;
+}
+// "render kettle hero shot fri 3h p1 #cad" → { title, project, due, estimate, priority, workType, tags }
+function parseQuickAdd(text, ctx) {
+  const today = ctx.today, out = { title: "", project: null, due: null, start: null, estimate: null, priority: null, workType: null, tags: [] };
+  let rest = " " + String(text || "").trim() + " ";
+  // project: @name (fuzzy) or a full project title in the text (longest first)
+  const projects = (ctx.projects || []).slice().sort((a, b) => b.length - a.length);
+  const at = rest.match(/\s@([^\s]+)/);
+  if (at) {
+    const q = at[1].toLowerCase();
+    const hit = projects.find(p => p.toLowerCase() === q) || projects.find(p => p.toLowerCase().replace(/\s+/g, "").startsWith(q)) || projects.find(p => p.toLowerCase().includes(q));
+    if (hit) { out.project = hit; rest = rest.replace(at[0], " "); }
+  }
+  if (!out.project) for (const p of projects) {
+    const re = new RegExp(`(^|\\s)${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=\\s)`, "i");
+    if (re.test(rest)) { out.project = p; break; } // keep the word in the title ("render kettle hero")
+  }
+  const take = (re, fn) => { rest = rest.replace(re, (...m) => { const r = fn(...m); return r === false ? m[0] : " "; }); };
+  take(/\s(\d+(?:\.\d+)?)\s?(h|hr|hrs|hours?)(?=\s)/i, (m, n) => { out.estimate = parseFloat(n); });
+  if (out.estimate == null) take(/\s(\d+)\s?(m|min|mins|minutes?)(?=\s)/i, (m, n) => { out.estimate = Math.round(parseFloat(n) / 6) / 10; });
+  take(/\sp([1-4])(?=\s)/i, (m, n) => { const p = (ctx.priorities || [])[Number(n) - 1]; if (!p) return false; out.priority = p; });
+  take(/\s#([^\s#]+)/g, (m, tag) => {
+    const wt = (ctx.workTypes || []).find(w => w.toLowerCase() === tag.toLowerCase());
+    if (wt && !out.workType) out.workType = wt; else out.tags.push(tag);
+  });
+  // dates
+  const setDue = d => { if (d && !out.due) out.due = d; };
+  take(/\s(today|tod)(?=\s)/i, () => setDue(today));
+  take(/\s(tomorrow|tmr|tom)(?=\s)/i, () => setDue(addDays(today, 1)));
+  take(/\s\+(\d+)\s?([dw])(?=\s)/i, (m, n, u) => setDue(addDays(today, Number(n) * (u.toLowerCase() === "w" ? 7 : 1))));
+  take(/\s(next\s+week)(?=\s)/i, () => setDue(addDays(mondayOf(addDays(today, 7)), 4)));
+  take(/\s([a-z]{3,9})\.?\s+(\d{1,2})(?=\s)/i, (m, mon, d) => { const i = MONTHS3.indexOf(mon.slice(0, 3).toLowerCase()); if (i === -1) return false; const r = dateFromMonthDay(today, i + 1, Number(d)); if (!r) return false; setDue(r); });
+  take(/\s(\d{1,2})\s+([a-z]{3,9})(?=\s)/i, (m, d, mon) => { const i = MONTHS3.indexOf(mon.slice(0, 3).toLowerCase()); if (i === -1) return false; const r = dateFromMonthDay(today, i + 1, Number(d)); if (!r) return false; setDue(r); });
+  take(/\s(\d{1,2})\/(\d{1,2})(?=\s)/, (m, mo, d) => { const r = dateFromMonthDay(today, Number(mo), Number(d)); if (!r) return false; setDue(r); });
+  take(/\s(\d{4}-\d{2}-\d{2})(?=\s)/, (m, d) => { if (!isDate(d)) return false; setDue(d); });
+  take(/\s(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(day)?(?=\s)/i, (m, d) => setDue(nextWeekday(today, WEEKDAYS.indexOf(d.slice(0, 3).toLowerCase()))));
+  // a work-type tag that names a project files the task there (#fun → Fun)
+  if (!out.project && out.workType) out.project = projects.find(p => p.toLowerCase() === out.workType.toLowerCase()) || null;
+  const title = rest.replace(/\s+/g, " ").trim();
+  out.title = title ? title[0].toUpperCase() + title.slice(1) : "";
+  return out;
+}
+
+// ---------- time log input ----------
+// "2h", "1.5", "90m", "1h30m", "2h -- note", "2h fixed the hinge"
+function parseLogInput(text) {
+  const s = String(text || "").trim();
+  const m = s.match(/^(?:(\d+(?:\.\d+)?)\s*h(?:ours?|rs?)?\s*(?:(\d+)\s*m(?:in)?)?|(\d+)\s*m(?:in)?|(\d+(?:\.\d+)?))(?=\s|$)\s*(?:--\s*)?(.*)$/i);
+  if (!m) return null;
+  let hours = m[1] != null ? parseFloat(m[1]) + (m[2] ? Number(m[2]) / 60 : 0) : m[3] != null ? Number(m[3]) / 60 : parseFloat(m[4]);
+  if (!(hours > 0) || hours > 24) return null;
+  return { hours: Math.round(hours * 100) / 100, note: (m[5] || "").trim() };
+}
+
+// ---------- schedule change log ----------
+// prev/cur: { start, due }. Returns a list of { field, from, to }.
+function dateChanges(prev, cur) {
+  const out = [];
+  for (const f of ["start", "due"]) if ((prev[f] || null) !== (cur[f] || null)) out.push({ field: f, from: prev[f] || null, to: cur[f] || null });
+  return out;
+}
+function describeChange(ch) { return ch.map(c => `${c.field} ${c.from ? c.from.slice(5) : "—"} → ${c.to ? c.to.slice(5) : "—"}`).join(", "); }
+// group: [{ task, changes, reason }], first = cause. Returns table rows for Schedule log.md.
+function scheduleRows(group, when) {
+  if (!group.length) return [];
+  const first = group[0];
+  const rows = [];
+  const why = (g, i) => g.reason ? g.reason : i === 0 ? (group.length > 1 ? "changed; moved the tasks below" : "moved by hand") : `knock-on from ${first.task.title}`;
+  group.forEach((g, i) => rows.push(`| ${when} | ${esc(g.task.title)} | ${esc(g.task.project || "")} | ${describeChange(g.changes)} | ${esc(why(g, i))} |`));
+  return rows;
+}
+function esc(s) { return String(s).replace(/\|/g, "\\|"); }
+const SCHEDULE_HEADER = "# Schedule log\n\nWritten by the dotpm Companion: every change to a task's start or due date, newest first. Changes within a couple of seconds are grouped; the first is the cause.\n\n| When | Task | Project | Change | Cause |\n| --- | --- | --- | --- | --- |\n";
+function prependRows(md, header, rows) {
+  if (!md || !md.includes("| --- |")) return header + rows.join("\n") + "\n";
+  const i = md.indexOf("\n", md.indexOf("| --- |")) + 1;
+  return md.slice(0, i) + rows.join("\n") + "\n" + md.slice(i);
+}
+
+// ---------- spillover ----------
+// Tasks due in the week before weekStart that aren't done.
+function spillover(tasks, cfg, weekStart) {
+  const from = addDays(weekStart, -7), to = addDays(weekStart, -1);
+  return tasks.filter(t => t.due && t.due >= from && t.due <= to && !isComplete(cfg, t.status))
+    .sort((a, b) => a.due.localeCompare(b.due));
+}
+const SPILLOVER_HEADER = "# Spillover\n\nWritten by the dotpm Companion each Monday: tasks due last week that weren't done, with the hours left. Newest first.\n\n| Week | Task | Project | Was due | Hours left |\n| --- | --- | --- | --- | --- |\n";
+function spilloverRows(list, week) {
+  if (!list.length) return [`| ${week} | (nothing spilled over) |  |  |  |`];
+  return list.map(t => `| ${week} | ${esc(t.title)} | ${esc(t.project || "")} | ${t.due} | ${Math.round(remaining(t) * 10) / 10} |`);
+}
+
+// ---------- project templates ----------
+// A template note has a table: | Task | Work type | Hours | Start day | Days | After | Done when |
+// Start day = days after the project start (0 = first day); After = task names (comma separated) it waits on.
+function parseTemplate(md) {
+  const lines = String(md || "").split(/\r?\n/).filter(l => /^\s*\|/.test(l));
+  if (lines.length < 2) return [];
+  const cells = l => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+  const head = cells(lines[0]).map(c => c.toLowerCase());
+  const col = (...names) => head.findIndex(h => names.some(n => h.includes(n)));
+  const ci = { task: col("task", "title"), type: col("work", "type"), hours: col("hour", "estimate"), start: col("start"), days: col("day"), after: col("after", "depend"), done: col("done") };
+  if (ci.days === ci.start) ci.days = head.findIndex((h, i) => h.includes("day") && i !== ci.start);
+  const out = [];
+  for (const l of lines.slice(1)) {
+    const c = cells(l);
+    if (c.every(x => /^:?-+:?$/.test(x) || !x)) continue;
+    const title = c[ci.task];
+    if (!title) continue;
+    out.push({
+      title, workType: ci.type >= 0 ? c[ci.type] || null : null,
+      hours: ci.hours >= 0 && isFinite(parseFloat(c[ci.hours])) ? parseFloat(c[ci.hours]) : null,
+      startDay: ci.start >= 0 && isFinite(parseInt(c[ci.start])) ? parseInt(c[ci.start]) : 0,
+      days: ci.days >= 0 && isFinite(parseInt(c[ci.days])) ? Math.max(1, parseInt(c[ci.days])) : 1,
+      after: ci.after >= 0 && c[ci.after] ? c[ci.after].split(/\s*,\s*/).filter(Boolean) : [],
+      doneWhen: ci.done >= 0 && c[ci.done] ? c[ci.done].split(/\s*;\s*/).filter(Boolean) : [],
+    });
+  }
+  return out;
+}
+function templateTasks(rows, projectStart) {
+  return rows.map(r => ({ ...r, start: addDays(projectStart, r.startDay), due: addDays(projectStart, r.startDay + r.days - 1) }));
+}
+
+
+// ---------- file fallbacks (used only when dotpm's store isn't available) ----------
+function slug(title) { return String(title).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "task"; }
+function yq(v) { return JSON.stringify(String(v)); }
+function taskFile(t, projectTitle) {
+  const fm = ["---", "pm-task: true", `projectId: ${yq(`[[${projectTitle}|${projectTitle}]]`)}`, "parentId:", `id: ${yq(t.id)}`, `title: ${yq(t.title)}`, `type: "task"`,
+    `status: ${yq(t.status)}`, `priority: ${yq(t.priority)}`, `start: ${yq(t.start)}`, `due: ${yq(t.due)}`, "progress: 0", "assignees: []",
+    `tags: [${(t.tags || []).map(yq).join(", ")}]`, "subtaskIds: []", "dependencies: []", `createdAt: ${yq(t.createdAt)}`, `updatedAt: ${yq(t.updatedAt)}`];
+  if (t.timeEstimate != null) fm.push(`timeEstimate: ${t.timeEstimate}`);
+  const cf = Object.entries(t.customFields || {});
+  if (cf.length) { fm.push("customFields:"); for (const [k, v] of cf) fm.push(`  ${k}: ${yq(v)}`); }
+  fm.push("---");
+  return fm.join("\n") + "\n\n" + (t.description ? t.description + "\n\n" : "") + `Project: [[${projectTitle}|${projectTitle}]]\n`;
+}
+// Add one entry to the timeLogs list in the frontmatter (block style), creating the key if needed.
+function appendTimeLog(text, log) {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return text;
+  const nl = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = m[1].split(/\r?\n/);
+  const entry = [`  - date: ${log.date}`, `    hours: ${log.hours}`, `    note: ${yq(log.note || "")}`];
+  let i = lines.findIndex(l => /^timeLogs:/.test(l));
+  if (i === -1) lines.push("timeLogs:", ...entry);
+  else {
+    if (/^timeLogs:\s*\[\s*\]\s*$/.test(lines[i])) lines[i] = "timeLogs:";
+    let j = i + 1; while (j < lines.length && /^\s+/.test(lines[j])) j++;
+    lines.splice(j, 0, ...entry);
+  }
+  return `---${nl}${lines.join(nl)}${nl}---` + text.slice(m[0].length);
+}
+const EXAMPLE_TEMPLATE = `# Case study template
+
+Used by **dotpm Companion → New project from template**. Each row becomes a task.
+*Start day* counts from the project's start date (0 = first day), *Days* is how long it runs,
+*After* lists tasks it waits on (comma separated), *Done when* items are separated by semicolons.
+
+| Task | Work type | Hours | Start day | Days | After | Done when |
+| --- | --- | --- | --- | --- | --- | --- |
+| Brief and framing | Writing | 4 | 0 | 4 |  | Angle written; persona; positioning map |
+| Research and references | Research | 4 | 0 | 4 |  | Competitors and references collected |
+| Form concepting | Concepting | 8 | 4 | 5 | Brief and framing | Sketches scanned; direction chosen |
+| CAD | CAD | 12 | 9 | 7 | Form concepting | Assembly complete; ready to render |
+| Prototype | Fabrication | 6 | 16 | 4 | CAD | Printed or built; photographed |
+| Renders | Render | 10 | 16 | 5 | CAD | Hero; exploded; in context |
+| Decision notes | Writing | 4 | 16 | 5 | CAD | 3–4 notes that explain why |
+| Case study page | Concepting | 8 | 21 | 4 | Renders, Decision notes, Prototype | Page published; 30-second test passes |
+`;
+
 // ---------- file text ----------
 function bodyOf(text) {
   const m = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
@@ -362,6 +614,9 @@ module.exports = {
   typeKey, multiplierFor, remaining, adjusted, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute,
   linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek,
+  parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,
+  dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
+  parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,
 };
 
 };
@@ -411,7 +666,7 @@ function typeColor(cfg, k) {
 }
 
 // ---------- shell ----------
-const TABS = [["dotpm", "dotpm"], ["board", "Board"], ["capacity", "Capacity"], ["types", "Work types"], ["multipliers", "Multipliers"]];
+const TABS = [["dotpm", "dotpm"], ["board", "Board"], ["projects", "Projects"], ["capacity", "Capacity"], ["types", "Work types"], ["multipliers", "Multipliers"]];
 function render(root, st, on) {
   const doc = root.ownerDocument;
   root.replaceChildren();
@@ -430,7 +685,7 @@ function render(root, st, on) {
   if (!st.result) { root.append(h(doc, "p", { class: "dpc-muted" }, "Reading tasks…")); return; }
   const body = h(doc, "div", { class: "dpc-body" });
   root.append(body);
-  ({ board: renderBoard, capacity: renderCapacity, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderBoard)(body, st, on);
+  ({ board: renderBoard, projects: renderProjects, capacity: renderCapacity, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderBoard)(body, st, on);
 }
 
 function taskLink(doc, t, on) {
@@ -511,6 +766,17 @@ function renderCapacity(body, st, on) {
       h(doc, "span", { class: "dpc-muted" }, r.overdue ? ` · was due ${fmtD(t.due)}, ${fmtH(r.need)} left with multiplier`
         : ` · needs ${fmtH(r.need)} by ${fmtD(t.due)}, ${fmtH(r.available)} available`));
   })) : h(doc, "p", { class: "dpc-muted" }, "No task needs more hours than are available before its due date."));
+  const waiting = st.tasks.filter(t => R.waiting && R.waiting[t.path]);
+  if (waiting.length) {
+    body.append(h(doc, "h4", { class: "dpc-h" }, "Waiting on an overdue task"));
+    body.append(h(doc, "ul", { class: "dpc-list" }, waiting.map(t => h(doc, "li", {}, taskLink(doc, t, on),
+      h(doc, "span", { class: "dpc-muted" }, " waits on "), ...R.waiting[t.path].map((x, i) => [i ? ", " : null, taskLink(doc, x, on), h(doc, "span", { class: "dpc-warn" }, ` (due ${fmtD(x.due)})`)]).flat()))));
+  }
+  if (st.spill) {
+    body.append(h(doc, "h4", { class: "dpc-h" }, `Spilled over from last week (${st.spill.length})`, h(doc, "span", { class: "dpc-muted dpc-h-note" }, `logged each Monday in ${st.settings.spilloverFile || "Spillover.md"}`)));
+    body.append(st.spill.length ? h(doc, "ul", { class: "dpc-list" }, st.spill.map(t => h(doc, "li", {}, taskLink(doc, t, on),
+      h(doc, "span", { class: "dpc-muted" }, ` · ${t.project} · was due ${fmtD(t.due)} · ${fmtH(M.remaining(t))} left`)))) : h(doc, "p", { class: "dpc-muted" }, "Everything due last week was finished."));
+  }
 
   const foot = [];
   if (R.unscheduled.length) foot.push(`${R.unscheduled.length} open task${R.unscheduled.length === 1 ? " has" : "s have"} no due date and ${R.unscheduled.length === 1 ? "isn't" : "aren't"} counted.`);
@@ -531,6 +797,7 @@ function renderQueue(body, st, on) {
     renderDoneToday(body, st, on);
     return;
   }
+  renderDays(body, st);
   const tb = h(doc, "tbody");
   const pulled = st.settings.pulled || {};
   R.queue.forEach((t, i) => {
@@ -538,14 +805,16 @@ function renderQueue(body, st, on) {
     tb.append(h(doc, "tr", {},
       h(doc, "td", { class: "dpc-num dpc-muted" }, String(i + 1)),
       h(doc, "td", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority) || "—")),
-      h(doc, "td", { class: "dpc-title-cell" }, taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType, pulled[t.path] ? "added today" : null].filter(Boolean).join(" · ")),
+      h(doc, "td", { class: "dpc-title-cell" }, taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType, pulled[t.path] && pulled[t.path].kind !== "deferred" ? "added today" : null, R.waiting[t.path] ? `waiting on ${R.waiting[t.path].map(x => x.title).join(", ")} (overdue)` : null].filter(Boolean).join(" · ")),
         t.checklist ? h(doc, "div", { class: "dpc-muted dpc-sub" }, `${t.checklist.done}/${t.checklist.total} done-when`) : null),
       h(doc, "td", { class: "dpc-nowrap" + (R.risk[t.path] && R.risk[t.path].overdue ? " dpc-warn" : ""), title: t.due ? null : "No due date" }, relDue(t.due, R.today)),
       h(doc, "td", { class: "dpc-num" }, t.type === "milestone" ? "◆" : fmtH(hrs)),
       h(doc, "td", {}, riskBadge(doc, R.risk[t.path])),
-      h(doc, "td", { class: "dpc-nowrap" }, pulled[t.path] ? h(doc, "button", { class: "dpc-small dpc-undo-pull", title: `Added today; undo puts it back to ${pulled[t.path].start ? "start " + fmtD(pulled[t.path].start) : "no start date"}`,
+      h(doc, "td", { class: "dpc-nowrap dpc-actions" }, pulled[t.path] && pulled[t.path].kind !== "deferred" ? h(doc, "button", { class: "dpc-small dpc-undo-pull", title: `Added today; undo puts it back to ${pulled[t.path].start ? "start " + fmtD(pulled[t.path].start) : "no start date"}`,
           "aria-label": `Undo adding ${t.title} to the queue`, onclick: () => on.undoStart(t.path) }, "Undo add") : null,
-        h(doc, "button", { class: "dpc-done", title: "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓"))));
+        h(doc, "button", { class: "dpc-small", title: "Log time on this task", "aria-label": `Log time on ${t.title}`, onclick: () => on.logTime(t.path) }, "+h"),
+        h(doc, "button", { class: "dpc-small", title: "Move to tomorrow", "aria-label": `Move ${t.title} to tomorrow`, onclick: () => on.notToday(t.path) }, "Not today"),
+        h(doc, "button", { class: "dpc-done", title: t.checklist && t.checklist.done < t.checklist.total ? "Mark done (Done-when not all ticked)" : "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓"))));
   });
   body.append(h(doc, "table", { class: "dpc-table dpc-queue" },
     h(doc, "thead", {}, h(doc, "tr", {}, ["#", "Priority", "Task", "Due", st.mode === "raw" ? "Left" : "Left ×", "", ""].map((c, i) => h(doc, "th", { class: i === 0 || i === 4 ? "dpc-num" : null }, c)))), tb));
@@ -559,8 +828,30 @@ function renderQueue(body, st, on) {
   }
 }
 
+function renderDays(body, st) {
+  const doc = body.ownerDocument, R = st.result;
+  if (!R.days || !R.days.length) return;
+  const max = Math.max(1, ...R.days.map(d => Math.max(d.adj, d.available)));
+  const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  body.append(h(doc, "div", { class: "dpc-days", role: "list", "aria-label": "Committed hours for the next 7 days" }, R.days.map((d, i) => {
+    const over = d.adj > d.available + 0.05;
+    return h(doc, "div", { class: "dpc-day" + (i === 0 ? " is-today" : "") + (over ? " is-over" : ""), role: "listitem",
+      title: `${fmtD(d.date)}: ${fmtH(d.adj)} committed (× multipliers) of about ${fmtH(d.available)} available` },
+      h(doc, "div", { class: "dpc-day-name" }, i === 0 ? "Today" : DOW[new Date(M.toDay(d.date) * 86400000).getUTCDay()]),
+      h(doc, "div", { class: "dpc-day-bar" }, h(doc, "div", { class: "dpc-day-fill", style: `height:${Math.min(100, (d.adj / max) * 100)}%` }),
+        h(doc, "div", { class: "dpc-day-cap", style: `bottom:${Math.min(100, (d.available / max) * 100)}%` })),
+      h(doc, "div", { class: "dpc-day-hrs" }, fmtH(d.adj)));
+  })));
+}
 function renderDoneToday(body, st, on) {
   const doc = body.ownerDocument, R = st.result;
+  const pulled = st.settings.pulled || {};
+  const deferred = st.tasks.filter(t => pulled[t.path] && pulled[t.path].kind === "deferred");
+  if (deferred.length) {
+    body.append(h(doc, "h4", { class: "dpc-h" }, `Moved to tomorrow (${deferred.length})`));
+    body.append(h(doc, "ul", { class: "dpc-list dpc-done-list" }, deferred.map(t => h(doc, "li", {}, h(doc, "span", { class: "dpc-muted", "aria-hidden": "true" }, "→"), taskLink(doc, t, on),
+      h(doc, "span", { class: "dpc-muted" }, ` · ${t.project}`), h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.undoStart(t.path), "aria-label": `Undo: bring ${t.title} back to today` }, "Undo")))));
+  }
   body.append(h(doc, "h4", { class: "dpc-h" }, `Done today (${R.doneToday.length})`, h(doc, "span", { class: "dpc-muted dpc-h-note" }, "clears at midnight")));
   if (!R.doneToday.length) { body.append(h(doc, "p", { class: "dpc-muted" }, "Nothing finished yet today.")); return; }
   body.append(h(doc, "ul", { class: "dpc-list dpc-done-list" }, R.doneToday.map(t =>
@@ -583,6 +874,70 @@ function renderMore(body, st, on, open) {
       h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.startNow(t.path) }, "Start now")))));
 }
 
+// ---------- projects (progress tracker, styled after dotpm's project overview) ----------
+const HEALTH = { "on-track": ["On track", "✓"], watch: ["Watch", "!"], behind: ["Behind", "▲"], done: ["Done", "✓"], empty: ["No tasks", "–"] };
+function renderProjects(body, st, on) {
+  const doc = body.ownerDocument, R = st.result, cfg = st.cfg, today = R.today;
+  const tree = M.projectTree(st.projects || []);
+  const rank = { behind: 0, watch: 1, "on-track": 2, done: 3, empty: 4 };
+  const stats = tree.map(n => M.projectStats(n, st.tasks, cfg, today, R.risk))
+    .sort((a, b) => (a.total ? 0 : 1) - (b.total ? 0 : 1) || rank[a.health] - rank[b.health] || a.node.title.localeCompare(b.node.title));
+  const flat = []; const walk = (s, depth) => { flat.push([s, depth]); s.kids.forEach(k => walk(k, depth + 1)); }; stats.forEach(s => walk(s, 0));
+  const count = k => flat.filter(([s]) => s.health === k).length;
+  body.append(h(doc, "div", { class: "dpc-toolbar" },
+    h(doc, "span", { class: "dpc-muted" }, `${flat.length} projects · ${count("behind")} behind · ${count("watch")} to watch · ${count("on-track")} on track`),
+    h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.newFromTemplate() }, "+ From template")));
+  if (!flat.length) { body.append(h(doc, "p", { class: "dpc-muted" }, "No projects yet.")); return; }
+  const list = h(doc, "div", { class: "dpc-projects" });
+  for (const [s, depth] of flat) list.append(projectCard(doc, s, depth, st, on));
+  body.append(list);
+}
+function projectCard(doc, s, depth, st, on) {
+  const R = st.result, cfg = st.cfg, n = s.node, open = st.openProjects && st.openProjects.has(n.path);
+  const [hl, hi] = HEALTH[s.health];
+  const pct = v => `${Math.round(v * 100)}%`;
+  const sub = s.kids.length ? ` · incl. ${s.kids.length} sub-project${s.kids.length === 1 ? "" : "s"}` : "";
+  const stat = (label, value, note, cls) => h(doc, "div", { class: "dpc-pstat" + (cls ? " " + cls : "") },
+    h(doc, "div", { class: "dpc-pstat-label" }, label), h(doc, "div", { class: "dpc-pstat-value" }, value), h(doc, "div", { class: "dpc-pstat-note" }, note));
+  const head = h(doc, "div", { class: "dpc-phead" },
+    h(doc, "div", { class: "dpc-picon", style: n.color ? `--dpc-pc:${n.color}` : null, "aria-hidden": "true" }, n.icon || "📋"),
+    h(doc, "div", { class: "dpc-ptitle-wrap" },
+      h(doc, "div", { class: "dpc-ptitle" }, h(doc, "a", { href: "#", class: "dpc-task-link", onclick: e => { e.preventDefault(); on.openProjectNote(n.path); } }, n.title),
+        h(doc, "span", { class: `dpc-health dpc-health-${s.health}` }, h(doc, "span", { "aria-hidden": "true" }, hi), hl)),
+      h(doc, "div", { class: "dpc-muted dpc-sub" }, s.total ? `${s.done} of ${s.total} task${s.total === 1 ? "" : "s"} done${sub}${s.nextDue ? ` · next due ${fmtD(s.nextDue.due)}` : ""}` : "No tasks yet — add one with Quick add")));
+  const plannedNote = s.planned == null ? "no dates yet" : s.gap >= 0.005 ? `${pct(s.gap)} ahead of plan` : s.gap <= -0.005 ? `${pct(-s.gap)} behind plan (${pct(s.planned)} planned)` : "on plan";
+  const grid = h(doc, "div", { class: "dpc-pgrid" },
+    stat("Progress", pct(s.actual), plannedNote, null),
+    stat("Tasks", `${s.done} of ${s.total}`, "done", null),
+    stat("Overdue", String(s.overdue.length), s.atRisk.length ? `tasks past due · ${s.atRisk.length} at risk` : "tasks past due", s.overdue.length ? "is-bad" : null),
+    stat("Time", `${fmtH(s.logged).replace("h", "")}/${fmtH(s.estimate)}`, "logged / estimate", null));
+  const bar = h(doc, "div", { class: "dpc-pbar", role: "img", "aria-label": `${pct(s.actual)} done${s.planned != null ? `, ${pct(s.planned)} planned by today` : ""}` },
+    h(doc, "div", { class: "dpc-pbar-fill", style: `width:${Math.min(100, s.actual * 100)}%` }),
+    s.planned != null ? h(doc, "div", { class: "dpc-pbar-plan", style: `left:${Math.min(100, s.planned * 100)}%`, title: `Planned by today: ${pct(s.planned)}` }) : null);
+  const ms = s.milestones.length ? h(doc, "div", { class: "dpc-pms" }, h(doc, "span", { class: "dpc-pstat-label" }, "Milestones"),
+    s.milestones.map(m => h(doc, "button", { class: `dpc-ms-chip is-${m.state}`, onclick: () => on.openTask(m.task.path), title: m.state === "missed" ? "Past its date and not done" : m.state === "done" ? "Done" : "Upcoming" },
+      h(doc, "span", { "aria-hidden": "true" }, m.state === "done" ? "◆ ✓" : "◆"), ` ${m.task.title}`, h(doc, "span", { class: "dpc-muted" }, m.task.due ? ` · ${fmtD(m.task.due)}` : "")))) : null;
+  const desc = n.description ? h(doc, "div", { class: "dpc-pdesc" }, n.description.split("\n").filter(Boolean)[0].replace(/\*\*/g, "")) : null;
+  const toggle = h(doc, "button", { class: "dpc-ptoggle", "aria-expanded": !!open, onclick: () => on.toggleProject(n.path) },
+    h(doc, "span", { class: "dpc-caret", "aria-hidden": "true" }, open ? "▾" : "▸"), `Tasks (${s.own.length}${s.kids.length ? ` here · ${s.total} with sub-projects` : ""})`);
+  if (!s.total) return h(doc, "section", { class: "dpc-pcard is-empty", style: `--dpc-depth:${depth}`, "aria-label": n.title }, head);
+  const card = h(doc, "section", { class: "dpc-pcard", style: `--dpc-depth:${depth}`, "aria-label": n.title }, head, grid, bar, ms, desc, toggle);
+  if (open) {
+    const tasks = s.own.slice().sort((a, b) => (M.isComplete(cfg, a.status) - M.isComplete(cfg, b.status)) || (a.due || "9999").localeCompare(b.due || "9999") || M.priorityRank(cfg, a.priority) - M.priorityRank(cfg, b.priority));
+    card.append(tasks.length ? h(doc, "ul", { class: "dpc-ptasks" }, tasks.map(t => {
+      const stc = cfg.statuses.find(x => x.id === t.status);
+      const done = M.isComplete(cfg, t.status), prog = done ? 100 : Math.max(0, Math.min(100, t.progress || 0));
+      return h(doc, "li", { class: done ? "is-done" : "" },
+        h(doc, "span", { class: "dpc-status", style: `--dpc-sc:${(stc && stc.color) || "var(--text-faint)"}` }, stc ? stc.label : t.status),
+        h(doc, "span", { class: "dpc-ptask-title" }, t.type === "milestone" ? "◆ " : null, taskLink(doc, t, on), " ", riskBadge(doc, R.risk[t.path])),
+        h(doc, "span", { class: "dpc-muted dpc-nowrap" + (!done && t.due && t.due < R.today ? " dpc-warn" : "") }, t.due ? fmtD(t.due) : ""),
+        h(doc, "span", { class: "dpc-muted dpc-num" }, t.estimate != null ? `${fmtH(t.logged).replace("h", "")}/${fmtH(t.estimate)}` : ""),
+        h(doc, "span", { class: "dpc-ptask-prog", role: "img", "aria-label": `${prog}% done` }, h(doc, "span", { style: `width:${prog}%` })));
+    })) : h(doc, "p", { class: "dpc-muted dpc-ptasks-empty" }, s.kids.length ? "No tasks directly in this project; see its sub-projects below." : "No tasks yet."));
+  }
+  return card;
+}
+
 // ---------- board ----------
 // Styled after dotpm's own kanban: colored column tops with count pills, compact cards with hours,
 // progress, a project chip and the due date. Actions (✓, Move…) show on hover, always on touch screens.
@@ -593,7 +948,8 @@ function renderBoard(body, st, on) {
     h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board view" }, [["today", "Today"], ["week", "By week"]].map(([id, name]) =>
       h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
     h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates."
-      : "Started tasks, best priority first. Finish them here or pull in more.")));
+      : "Started tasks, best priority first. Finish them here or pull in more."),
+    h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.quickAdd(), title: "Quick add a task (command: Quick add task)" }, "+ Quick add")));
   if (mode === "today") { renderQueue(body, st, on); return; }
   const cols = R.board.map(c => ({ ...c, color: c.key === "overdue" ? "var(--dpc-risk)" : c.week && c.week.overloaded ? "var(--dpc-over)" : c.week && c.week.isCurrent ? "var(--interactive-accent, var(--text-accent))" : "var(--text-faint)" }));
   const targets = R.board.filter(c => c.week).map(c => ({ key: c.key, label: c.week.isCurrent ? "This week" : `${c.key.slice(5)} · ${fmtD(c.week.start)}` }));
@@ -836,7 +1192,7 @@ module.exports = { render, typeColor, typeKeys, typeName, fmtH, fmtX };
 
 };
 __mods["./main"] = function(module, exports, require){
-const { Plugin, ItemView, PluginSettingTab, Setting, Notice, TFile, normalizePath, debounce } = require("obsidian");
+const { Plugin, ItemView, PluginSettingTab, Setting, Notice, TFile, TFolder, Modal, FuzzySuggestModal, Platform, normalizePath, debounce } = require("obsidian");
 const M = require("./model");
 const V = require("./views");
 
@@ -859,6 +1215,13 @@ const DEFAULTS = {
   dotpmDueSort: true,
   dotpmSortSeen: [],
   workTypeFromProject: true,
+  quickAddProject: "Misc",
+  templatesFolder: "Templates/Projects",
+  scheduleLog: true,
+  scheduleLogFile: "Schedule log.md",
+  spilloverFile: "Spillover.md",
+  lastSpilloverWeek: "",
+  logDeviceId: "",
   dotpmState: null,
   showDone: false,
   boardMode: "today",
@@ -869,7 +1232,7 @@ const DEFAULTS = {
 };
 
 class CompanionView extends ItemView {
-  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = ({ tasks: "dotpm", queue: "board" })[plugin.settings.lastTab] || plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; }
+  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = ({ tasks: "dotpm", queue: "board" })[plugin.settings.lastTab] || plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; this.openProjects = new Set(); }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "dotpm Companion"; }
   getIcon() { return "gauge"; }
@@ -936,7 +1299,8 @@ class CompanionView extends ItemView {
     if (this.tab === "dotpm" && this.dotpmView && this.dotpmView.containerEl.isConnected) return;
     V.render(root, {
       tab: this.tab, mode: this.mode, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
-      bridged: !!p.dotpm(), showMore: !!this.showMore, projectColors: p.projectColors, dotpmError: this.dotpmError ? String(this.dotpmError.message || this.dotpmError) : null,
+      bridged: !!p.dotpm(), showMore: !!this.showMore, openProjects: this.openProjects, projects: Object.values(p.projectNotes).filter(x => !x.archived),
+      spill: M.spillover(p.taskList(), p.cfg, M.mondayOf(M.localToday())), projectColors: p.projectColors, dotpmError: this.dotpmError ? String(this.dotpmError.message || this.dotpmError) : null,
       cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity }, tasks: p.taskList(), result: p.result,
     }, {
       setTab: t => this.switchTab(t),
@@ -951,6 +1315,12 @@ class CompanionView extends ItemView {
       undoDone: path => p.undoDone(path),
       startNow: path => p.startNow(path),
       undoStart: path => p.undoStart(path),
+      notToday: path => p.notToday(path),
+      logTime: path => { const t = p.tasks.get(path); if (t) new LogTimeModal(p, t).open(); },
+      quickAdd: () => new QuickAddModal(p).open(),
+      newFromTemplate: () => p.templatePicker(),
+      toggleProject: k => { if (this.openProjects.has(k)) this.openProjects.delete(k); else this.openProjects.add(k); this.refresh(); },
+      openProjectNote: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
       moveCard: (path, key) => p.moveCard(path, key),
       setBoardMode: m => { p.settings.boardMode = m; p.saveSettings(); this.refresh(); },
       toggleMore: () => { this.showMore = !this.showMore; this.refresh(); },
@@ -968,6 +1338,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.capacity = {};
     this.result = null;
     this.pendingProgress = new Map();
+    this.dates = new Map(); this.reasons = new Map(); this.logGroup = []; this.logTimer = null; this.confirmDone = new Map();
     this.cfg = M.readDotpmConfig({});
     await this.loadSettings();
 
@@ -977,6 +1348,14 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.addCommand({ id: "open-dotpm", name: "Open dotpm tab", callback: () => this.activateView("dotpm") });
     this.addCommand({ id: "open-today", name: "Open today's queue", callback: () => { this.settings.boardMode = "today"; this.activateView("board"); } });
     this.addCommand({ id: "create-capacity", name: "Create capacity file", callback: () => this.createCapacityFile() });
+    this.addCommand({ id: "open-projects", name: "Open project progress", callback: () => this.activateView("projects") });
+    this.addCommand({ id: "quick-add", name: "Quick add task", callback: () => new QuickAddModal(this).open() });
+    this.addCommand({ id: "log-time", name: "Log time…", callback: () => this.logTimePicker() });
+    this.addCommand({ id: "log-time-here", name: "Log time on this task", checkCallback: checking => {
+      const f = this.app.workspace.getActiveFile(); const t = f && this.tasks.get(f.path);
+      if (!t) return false; if (!checking) new LogTimeModal(this, t).open(); return true; } });
+    this.addCommand({ id: "new-from-template", name: "New project from template", callback: () => this.templatePicker() });
+    this.addCommand({ id: "write-spillover", name: "Write last week's spillover now", callback: () => this.writeSpillover(true) });
     this.addCommand({ id: "sync-progress", name: "Update progress from Done-when checklists (all tasks)", callback: () => this.syncAllProgress() });
     this.addSettingTab(new CompanionSettings(this.app, this));
 
@@ -986,6 +1365,8 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
       await this.rebuildIndex();
       try { await this.applyDotpmDueSort(); } catch (e) { console.warn("[dotpm-companion] could not set dotpm's default sort", e); }
       for (const t of this.taskList()) if (!t.workType) await this.applyProjectWorkType(t.path);
+      this.claimLogDevice();
+      await this.writeSpillover(false);
       this.registerEvent(this.app.metadataCache.on("changed", (file, data, cache) => this.onChanged(file, data, cache)));
       this.registerEvent(this.app.vault.on("delete", f => { if (this.tasks.delete(f.path)) this.scheduleRecompute(); if (f.path === this.settings.capacityFile) this.loadCapacity().then(() => this.scheduleRecompute()); }));
       this.registerEvent(this.app.vault.on("rename", (f, old) => { if (this.tasks.has(old)) { this.tasks.delete(old); this.indexFile(f).then(() => this.scheduleRecompute()); } }));
@@ -993,12 +1374,12 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
         if (f.path === normalizePath(this.app.vault.configDir + "/plugins/project-manager/data.json")) this.reloadDotpmConfig().then(() => this.rebuildIndex());
       }));
       this.registerInterval(window.setInterval(() => {
-        if (this.result && this.result.today !== M.localToday()) { this.settings.undo = {}; this.settings.pulled = {}; this.saveSettings(); this.recompute(); }
+        if (this.result && this.result.today !== M.localToday()) { this.settings.undo = {}; this.settings.pulled = {}; this.saveSettings(); this.recompute(); this.writeSpillover(false); }
       }, 60 * 1000));
       if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("dotpm");
     });
   }
-  onunload() { for (const t of this.pendingProgress.values()) clearTimeout(t); }
+  onunload() { for (const t of this.pendingProgress.values()) clearTimeout(t); if (this.logTimer) { clearTimeout(this.logTimer); this.flushScheduleLog(); } }
 
   async loadSettings() {
     const data = (await this.loadData()) || {};
@@ -1028,18 +1409,24 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const fm = (this.app.metadataCache.getFileCache(file) || {}).frontmatter;
     if (fm && fm["pm-project"] === true && typeof fm.title === "string") {
       this.projectColors[fm.title] = typeof fm.color === "string" ? fm.color : null;
-      this.projectNotes[file.path] = { title: fm.title, parent: typeof fm.parent === "string" && fm.parent ? fm.parent : null };
+      const text = content != null ? content : await this.app.vault.cachedRead(file);
+      const body = M.bodyOf(text).replace(/^\s*#[ \t][^\n]*\n?/, "").replace(/(?:^|\n)## Tasks[\s\S]*$/, "").trim();
+      this.projectNotes[file.path] = { path: file.path, title: fm.title, parent: typeof fm.parent === "string" && fm.parent ? fm.parent : null,
+        icon: typeof fm.icon === "string" ? fm.icon : "📋", color: typeof fm.color === "string" ? fm.color : null, description: body, archived: fm.archived === true };
     }
     if (!fm || fm["pm-task"] !== true) { this.tasks.delete(file.path); return null; }
     const text = content != null ? content : await this.app.vault.cachedRead(file);
     const t = M.parseTask(file.path, fm, M.bodyOf(text), this.cfg);
     if (t) this.tasks.set(file.path, t); else this.tasks.delete(file.path);
+    if (t) this.trackDates(t);
     return t;
   }
   async rebuildIndex() {
     this.tasks.clear();
+    this.dates = new Map(); this.indexing = true;
     const files = this.app.vault.getMarkdownFiles().filter(f => this.inProjects(f.path));
     await Promise.all(files.map(f => this.indexFile(f)));
+    this.indexing = false;
     await this.loadCapacity();
     this.recompute();
   }
@@ -1119,6 +1506,14 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   async markDone(path) {
     const t = this.tasks.get(path);
     if (!t) return;
+    const left = t.checklist ? t.checklist.total - t.checklist.done : 0;
+    const asked = this.confirmDone.get(path);
+    if (left > 0 && !(asked && Date.now() - asked < 8000)) {
+      this.confirmDone.set(path, Date.now());
+      new Notice(`“${t.title}” has ${left} Done-when item${left === 1 ? "" : "s"} not ticked. Press ✓ again to mark it done anyway.`, 8000);
+      return;
+    }
+    this.confirmDone.delete(path);
     this.settings.undo[path] = { prev: t.status, date: M.localToday() };
     await this.saveSettings();
     await this.updateTask(path, { status: M.doneStatusId(this.cfg) });
@@ -1144,7 +1539,9 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const patch = { start: today };
     if (t.due && t.due < today) patch.due = today;
     if (!this.settings.pulled[path]) this.settings.pulled[path] = { start: t.start, due: t.due, date: today };
+    this.settings.pulled[path].kind = "added";
     await this.saveSettings();
+    this.noteReason(path, "Start now (Today)");
     await this.updateTask(path, patch);
     this.noticeWithUndo(`“${t.title}” added to the queue.`, () => this.undoStart(path));
   }
@@ -1154,6 +1551,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     if (!t || !u) return;
     delete this.settings.pulled[path];
     await this.saveSettings();
+    this.noteReason(path, "undo in Today");
     const patch = { start: u.start || "" };
     if ((u.due || "") !== (t.due || "")) patch.due = u.due || "";
     await this.updateTask(path, patch);
@@ -1173,6 +1571,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   async moveCard(path, key) {
     const t = this.tasks.get(path);
     if (!t) return;
+    this.noteReason(path, "moved on the Board");
     const w = this.result && this.result.weeks.find(x => x.week === key);
     if (!w) return;
     const patch = M.shiftToWeek(t, w.start);
@@ -1194,6 +1593,142 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const f = this.app.vault.getAbstractFileByPath(path);
     if (f instanceof TFile) this.app.workspace.getLeaf(false).openFile(f);
   }
+  // Today: push a started task to tomorrow (start, and due if it would fall before), with undo.
+  async notToday(path) {
+    const t = this.tasks.get(path);
+    if (!t) return;
+    const today = M.localToday(), tomorrow = M.addDays(today, 1);
+    if (!this.settings.pulled[path]) this.settings.pulled[path] = { start: t.start, due: t.due, date: today };
+    this.settings.pulled[path].kind = "deferred";
+    await this.saveSettings();
+    const patch = { start: tomorrow };
+    if (t.due && t.due < tomorrow) patch.due = tomorrow;
+    this.noteReason(path, "Not today (Today)");
+    await this.updateTask(path, patch);
+    this.noticeWithUndo(`“${t.title}” moved to tomorrow${patch.due ? " (due date too)" : ""}.`, () => this.undoStart(path));
+  }
+
+  // ---- time log ----
+  logTimePicker() {
+    const f = this.app.workspace.getActiveFile(), here = f && this.tasks.get(f.path);
+    if (here) { new LogTimeModal(this, here).open(); return; }
+    new TaskSuggestModal(this, t => new LogTimeModal(this, t).open()).open();
+  }
+  async logTime(path, hours, note) {
+    const t = this.tasks.get(path);
+    const f = this.app.vault.getAbstractFileByPath(path);
+    if (!t || !(f instanceof TFile)) return;
+    const fm = (this.app.metadataCache.getFileCache(f) || {}).frontmatter || {};
+    const logs = (Array.isArray(fm.timeLogs) ? fm.timeLogs : []).map(l => ({ date: M.normDate(l.date) || String(l.date || ""), hours: Number(l.hours) || 0, note: typeof l.note === "string" ? l.note : "" }));
+    logs.push({ date: M.localToday(), hours, note: note || "" });
+    if (this.dotpm()) await this.updateTask(path, { timeLogs: logs });
+    else await this.app.vault.process(f, text => M.appendTimeLog(text, logs[logs.length - 1]));
+    new Notice(`Logged ${hours}h on “${t.title}”.`);
+  }
+
+  // ---- quick-add and templates: create through dotpm's store ----
+  projectPathByTitle(title) { return Object.keys(this.projectNotes).find(k => this.projectNotes[k].title === title) || null; }
+  newTaskObject(fields) {
+    const now = new Date().toISOString(), today = M.localToday();
+    const t = { id: newId(), title: fields.title, description: fields.description || "", type: "task", status: "todo", priority: fields.priority || "medium",
+      start: fields.start || today, due: fields.due || "", progress: 0, completed: "", assignees: [], tags: fields.tags || [], subtasks: [], dependencies: fields.dependencies || [],
+      customFields: fields.workType && this.cfg.workTypeFieldId ? { [this.cfg.workTypeFieldId]: fields.workType } : {}, createdAt: now, updatedAt: now };
+    if (fields.estimate != null) t.timeEstimate = fields.estimate;
+    return t;
+  }
+  async createTask(projectTitle, fields) {
+    const pm = this.dotpm(), path = this.projectPathByTitle(projectTitle);
+    if (!path) throw new Error(`No project called “${projectTitle}”.`);
+    const task = this.newTaskObject(fields);
+    if (pm && typeof pm.store.insertTask === "function") {
+      const project = await pm.store.loadProjectByPath(path);
+      if (!project) throw new Error(`dotpm couldn't load “${projectTitle}”.`);
+      await pm.store.insertTask(project, task, null);
+      if (typeof pm.refreshViews === "function") pm.refreshViews();
+      return task;
+    }
+    const folder = path.replace(/\/[^/]+$/, "") + "/_tasks";
+    if (!this.app.vault.getAbstractFileByPath(folder)) await this.app.vault.createFolder(folder);
+    await this.app.vault.create(normalizePath(`${folder}/${M.slug(task.title)}.md`), M.taskFile(task, projectTitle));
+    return task;
+  }
+  async templatePicker() {
+    const folder = this.app.vault.getAbstractFileByPath(normalizePath(this.settings.templatesFolder));
+    let files = folder instanceof TFolder ? folder.children.filter(f => f instanceof TFile && f.extension === "md") : [];
+    if (!files.length) { files = [await this.createExampleTemplate()]; new Notice(`Created an example template in ${this.settings.templatesFolder}.`); }
+    new FileSuggestModal(this, files, f => new TemplateModal(this, f).open()).open();
+  }
+  async createExampleTemplate() {
+    const dir = normalizePath(this.settings.templatesFolder);
+    if (!this.app.vault.getAbstractFileByPath(dir)) await this.app.vault.createFolder(dir);
+    return this.app.vault.create(normalizePath(`${dir}/Case study.md`), M.EXAMPLE_TEMPLATE);
+  }
+  async createFromTemplate(file, title, start, parentPath) {
+    const pm = this.dotpm();
+    if (!pm || typeof pm.store.createProject !== "function" || typeof pm.store.insertTask !== "function") throw new Error("dotpm needs to be enabled to create projects.");
+    const rows = M.templateTasks(M.parseTemplate(await this.app.vault.cachedRead(file)), start);
+    if (!rows.length) throw new Error("The template has no task table.");
+    const parentFolder = parentPath ? parentPath.replace(/\/[^/]+\/[^/]+$/, "") || this.cfg.projectsFolder : null;
+    const base = parentFolder || (this.app.vault.getAbstractFileByPath(normalizePath(this.cfg.projectsFolder + "Fall 2026")) ? normalizePath(this.cfg.projectsFolder + "Fall 2026") : this.cfg.projectsFolder.replace(/\/$/, ""));
+    const project = await pm.store.createProject(title, base, { icon: "📋", description: `Made from the ${file.basename} template.`, parentPath: parentPath || undefined });
+    const ids = {};
+    for (const r of rows) ids[r.title.toLowerCase()] = newId();
+    for (const r of rows) {
+      const desc = r.doneWhen.length ? "## Done when\n" + r.doneWhen.map(d => `- [ ] ${d}`).join("\n") : "";
+      const t = this.newTaskObject({ title: r.title, workType: this.cfg.workTypes.find(w => w.toLowerCase() === String(r.workType || "").toLowerCase()) || null,
+        estimate: r.hours, start: r.start, due: r.due, description: desc, dependencies: r.after.map(a => ids[a.toLowerCase()]).filter(Boolean) });
+      t.id = ids[r.title.toLowerCase()];
+      await pm.store.insertTask(project, t, null);
+    }
+    if (typeof pm.refreshViews === "function") pm.refreshViews();
+    new Notice(`Created “${title}” with ${rows.length} tasks.`);
+  }
+
+  // ---- schedule change log (one device writes it) ----
+  deviceId() {
+    let id = null;
+    try { id = this.app.loadLocalStorage ? this.app.loadLocalStorage("dpc-device-id") : window.localStorage.getItem("dpc-device-id"); } catch (e) { /* ignore */ }
+    if (!id) { id = newId(); try { this.app.saveLocalStorage ? this.app.saveLocalStorage("dpc-device-id", id) : window.localStorage.setItem("dpc-device-id", id); } catch (e) { /* ignore */ } }
+    return id;
+  }
+  isLogDevice() { return !!this.settings.logDeviceId && this.settings.logDeviceId === this.deviceId(); }
+  claimLogDevice(force) {
+    if (force || (!this.settings.logDeviceId && Platform && Platform.isDesktopApp)) { this.settings.logDeviceId = this.deviceId(); this.saveSettings(); }
+  }
+  noteReason(path, why) { this.reasons.set(path, { why, at: Date.now() }); }
+  trackDates(t) {
+    const cur = { start: t.start, due: t.due }, prev = this.dates.get(t.path);
+    this.dates.set(t.path, cur);
+    if (!prev || this.indexing || !this.settings.scheduleLog || !this.isLogDevice()) return;
+    const changes = M.dateChanges(prev, cur);
+    if (!changes.length) return;
+    const r = this.reasons.get(t.path);
+    this.logGroup.push({ task: t, changes, reason: r && Date.now() - r.at < 6000 ? r.why : null });
+    clearTimeout(this.logTimer);
+    this.logTimer = setTimeout(() => this.flushScheduleLog(), 2500);
+  }
+  async flushScheduleLog() {
+    const group = this.logGroup; this.logGroup = []; this.logTimer = null;
+    if (!group.length) return;
+    const d = new Date(), when = `${M.localToday()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    await this.prependTo(this.settings.scheduleLogFile, M.SCHEDULE_HEADER, M.scheduleRows(group, when));
+  }
+  async prependTo(name, header, rows) {
+    const p = normalizePath(name), f = this.app.vault.getAbstractFileByPath(p);
+    if (f instanceof TFile) await this.app.vault.process(f, md => M.prependRows(md, header, rows));
+    else await this.app.vault.create(p, M.prependRows("", header, rows));
+  }
+  // ---- spillover: each Monday, last week's unfinished tasks ----
+  async writeSpillover(force) {
+    if (!force && !this.isLogDevice()) return;
+    const today = M.localToday(), week = M.isoWeek(today);
+    if (!force && this.settings.lastSpilloverWeek === week) return;
+    const prevWeek = M.isoWeek(M.addDays(M.mondayOf(today), -7));
+    await this.prependTo(this.settings.spilloverFile, M.SPILLOVER_HEADER, M.spilloverRows(M.spillover(this.taskList(), this.cfg, M.mondayOf(today)), prevWeek));
+    this.settings.lastSpilloverWeek = week; await this.saveSettings();
+    if (force) new Notice(`Wrote ${prevWeek} to ${this.settings.spilloverFile}.`);
+  }
+
   async setMultiplier(key, value) {
     this.settings.multipliers[key] = value;
     this.settings.multiplierHistory = M.recordMultiplier(this.settings.multiplierHistory, M.localToday(), key, value);
@@ -1296,6 +1831,14 @@ class CompanionSettings extends PluginSettingTab {
       .addToggle(t => t.setValue(S.dotpmDueSort).onChange(async v => { S.dotpmDueSort = v; await p.saveSettings(); if (v) await p.applyDotpmDueSort(); }));
     new Setting(el).setName("Work type from project").setDesc("A task without a work type in a project named like a work type (IDSA, Fun, Misc…) gets that work type.")
       .addToggle(t => t.setValue(S.workTypeFromProject).onChange(async v => { S.workTypeFromProject = v; await p.saveSettings(); }));
+    new Setting(el).setName("Quick-add default project").setDesc("Where a quick-added task goes when the line names no project.")
+      .addDropdown(d => { for (const k of Object.keys(p.projectNotes).sort()) d.addOption(p.projectNotes[k].title, p.projectNotes[k].title); d.setValue(S.quickAddProject).onChange(async v => { S.quickAddProject = v; await p.saveSettings(); }); });
+    new Setting(el).setName("Templates folder").setDesc("Notes with a task table, used by “New project from template”.")
+      .addText(t => t.setValue(S.templatesFolder).onChange(async v => { S.templatesFolder = v.trim() || DEFAULTS.templatesFolder; await p.saveSettings(); }));
+    new Setting(el).setName("Schedule log").setDesc(`Record every start/due change in “${S.scheduleLogFile}”, and last week's unfinished tasks in “${S.spilloverFile}” each Monday.`)
+      .addToggle(t => t.setValue(S.scheduleLog).onChange(async v => { S.scheduleLog = v; await p.saveSettings(); }));
+    new Setting(el).setName("Write the logs from this device").setDesc(p.isLogDevice() ? "This device writes the logs." : "Another device writes the logs (only one should, so Sync doesn't double them).")
+      .addButton(b => b.setButtonText(p.isLogDevice() ? "This device" : "Use this device").setDisabled(p.isLogDevice()).onClick(() => { p.claimLogDevice(true); this.display(); }));
     new Setting(el).setName("Open on startup").setDesc("Open the companion on the dotpm tab when Obsidian starts.")
       .addToggle(t => t.setValue(S.openOnStartup).onChange(async v => { S.openOnStartup = v; await p.saveSettings(); }));
     new Setting(el).setName("Multipliers").setHeading();
@@ -1307,6 +1850,102 @@ class CompanionSettings extends PluginSettingTab {
   }
 }
 module.exports.CompanionView = CompanionView;
+
+function newId() { return Array.from({ length: 16 }, () => "abcdefghijklmnopqrstuvwxyz0123456789"[Math.floor(Math.random() * 36)]).join(""); }
+
+class TaskSuggestModal extends FuzzySuggestModal {
+  constructor(plugin, onPick) { super(plugin.app); this.plugin = plugin; this.onPick = onPick; this.setPlaceholder("Log time on which task?"); }
+  getItems() {
+    const R = this.plugin.result, cfg = this.plugin.cfg;
+    const open = this.plugin.taskList().filter(t => !M.isComplete(cfg, t.status));
+    const q = R ? R.queue : [];
+    return q.concat(open.filter(t => !q.includes(t)));
+  }
+  getItemText(t) { return `${t.title} — ${t.project}`; }
+  onChooseItem(t) { this.onPick(t); }
+}
+class FileSuggestModal extends FuzzySuggestModal {
+  constructor(plugin, files, onPick) { super(plugin.app); this.files = files; this.onPick = onPick; this.setPlaceholder("Choose a template"); }
+  getItems() { return this.files; }
+  getItemText(f) { return f.basename; }
+  onChooseItem(f) { this.onPick(f); }
+}
+class LogTimeModal extends Modal {
+  constructor(plugin, task) { super(plugin.app); this.plugin = plugin; this.task = task; }
+  onOpen() {
+    const { contentEl: el } = this, t = this.task;
+    el.addClass("dpc-modal");
+    el.createEl("h3", { text: "Log time" });
+    el.createDiv({ cls: "dpc-muted", text: `${t.title} · ${t.project} · ${t.logged}/${t.estimate == null ? "?" : t.estimate}h so far` });
+    const input = el.createEl("input", { type: "text", cls: "dpc-modal-input", attr: { placeholder: "2h, 90m, 1h30m — optional note after", "aria-label": "Time spent" } });
+    const hint = el.createDiv({ cls: "dpc-muted dpc-modal-hint", text: "Logged for today. Enter to save." });
+    const go = async () => {
+      const v = M.parseLogInput(input.value);
+      if (!v) { hint.setText("Couldn't read that. Try “2h”, “45m” or “1h30m fixed the hinge”."); return; }
+      this.close(); await this.plugin.logTime(t.path, v.hours, v.note);
+    };
+    input.addEventListener("input", () => { const v = M.parseLogInput(input.value); hint.setText(v ? `${v.hours}h today${v.note ? ` — “${v.note}”` : ""}. Enter to save.` : "Logged for today. Enter to save."); });
+    input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+    setTimeout(() => input.focus(), 0);
+  }
+  onClose() { this.contentEl.empty(); }
+}
+class QuickAddModal extends Modal {
+  constructor(plugin) { super(plugin.app); this.plugin = plugin; }
+  onOpen() {
+    const p = this.plugin, { contentEl: el } = this;
+    el.addClass("dpc-modal");
+    el.createEl("h3", { text: "Quick add" });
+    const input = el.createEl("input", { type: "text", cls: "dpc-modal-input", attr: { placeholder: "render kettle hero shot fri 3h p1 #cad", "aria-label": "New task" } });
+    const prev = el.createDiv({ cls: "dpc-qa-preview" });
+    el.createDiv({ cls: "dpc-muted dpc-modal-hint", text: "Project by name or @name · fri, nov 9, 12/5, +3d · 3h or 90m · p1–p4 · #worktype or #tag · Enter to add" });
+    const parse = () => M.parseQuickAdd(input.value, { today: M.localToday(), projects: Object.values(p.projectNotes).map(x => x.title), workTypes: p.cfg.workTypes, priorities: p.cfg.priorities.map(x => x.id) });
+    const show = () => {
+      const q = parse(); prev.empty();
+      const proj = q.project || p.settings.quickAddProject;
+      const chip = (k, v, muted) => prev.createSpan({ cls: "dpc-qa-chip" + (muted ? " is-default" : ""), text: `${k}: ${v}` });
+      chip("Task", q.title || "—"); chip("Project", proj || "—", !q.project); chip("Due", q.due || "—", !q.due);
+      chip("Estimate", q.estimate != null ? `${q.estimate}h` : "—", q.estimate == null);
+      chip("Priority", q.priority ? M.label(p.cfg.priorities, q.priority) : "Medium", !q.priority);
+      chip("Work type", q.workType || (p.cfg.workTypes.find(w => w.toLowerCase() === String(proj).toLowerCase()) || "—"), !q.workType);
+      if (q.tags.length) chip("Tags", q.tags.join(", "));
+    };
+    input.addEventListener("input", show); show();
+    input.addEventListener("keydown", async e => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      const q = parse();
+      if (!q.title) return;
+      const proj = q.project || p.settings.quickAddProject;
+      try { await p.createTask(proj, q); new Notice(`Added “${q.title}” to ${proj}.`); this.close(); }
+      catch (err) { new Notice(String(err.message || err)); }
+    });
+    setTimeout(() => input.focus(), 0);
+  }
+  onClose() { this.contentEl.empty(); }
+}
+class TemplateModal extends Modal {
+  constructor(plugin, file) { super(plugin.app); this.plugin = plugin; this.file = file; }
+  onOpen() {
+    const p = this.plugin, { contentEl: el } = this;
+    el.addClass("dpc-modal");
+    el.createEl("h3", { text: `New project from “${this.file.basename}”` });
+    let title = "", start = M.localToday(), parent = "";
+    new Setting(el).setName("Project name").addText(t => { t.setPlaceholder("e.g. Toaster case study").onChange(v => { title = v.trim(); }); setTimeout(() => t.inputEl.focus(), 0); });
+    new Setting(el).setName("Start date").addText(t => t.setValue(start).onChange(v => { start = v.trim(); }));
+    new Setting(el).setName("Inside project").addDropdown(d => {
+      d.addOption("", "— top level —");
+      for (const k of Object.keys(p.projectNotes).sort()) d.addOption(k, p.projectNotes[k].title);
+      d.onChange(v => { parent = v; });
+    });
+    new Setting(el).addButton(b => b.setButtonText("Create").setCta().onClick(async () => {
+      if (!title) { new Notice("Give the project a name."); return; }
+      if (!M.isDate(start)) { new Notice("Start date must look like 2026-11-02."); return; }
+      try { await p.createFromTemplate(this.file, title, start, parent || null); this.close(); } catch (err) { new Notice(String(err.message || err)); }
+    }));
+  }
+  onClose() { this.contentEl.empty(); }
+}
 
 };
 module.exports = __req("./main");

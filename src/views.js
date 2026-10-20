@@ -44,7 +44,7 @@ function typeColor(cfg, k) {
 }
 
 // ---------- shell ----------
-const TABS = [["dotpm", "dotpm"], ["board", "Board"], ["capacity", "Capacity"], ["types", "Work types"], ["multipliers", "Multipliers"]];
+const TABS = [["dotpm", "dotpm"], ["board", "Board"], ["projects", "Projects"], ["capacity", "Capacity"], ["types", "Work types"], ["multipliers", "Multipliers"]];
 function render(root, st, on) {
   const doc = root.ownerDocument;
   root.replaceChildren();
@@ -63,7 +63,7 @@ function render(root, st, on) {
   if (!st.result) { root.append(h(doc, "p", { class: "dpc-muted" }, "Reading tasks…")); return; }
   const body = h(doc, "div", { class: "dpc-body" });
   root.append(body);
-  ({ board: renderBoard, capacity: renderCapacity, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderBoard)(body, st, on);
+  ({ board: renderBoard, projects: renderProjects, capacity: renderCapacity, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderBoard)(body, st, on);
 }
 
 function taskLink(doc, t, on) {
@@ -144,6 +144,17 @@ function renderCapacity(body, st, on) {
       h(doc, "span", { class: "dpc-muted" }, r.overdue ? ` · was due ${fmtD(t.due)}, ${fmtH(r.need)} left with multiplier`
         : ` · needs ${fmtH(r.need)} by ${fmtD(t.due)}, ${fmtH(r.available)} available`));
   })) : h(doc, "p", { class: "dpc-muted" }, "No task needs more hours than are available before its due date."));
+  const waiting = st.tasks.filter(t => R.waiting && R.waiting[t.path]);
+  if (waiting.length) {
+    body.append(h(doc, "h4", { class: "dpc-h" }, "Waiting on an overdue task"));
+    body.append(h(doc, "ul", { class: "dpc-list" }, waiting.map(t => h(doc, "li", {}, taskLink(doc, t, on),
+      h(doc, "span", { class: "dpc-muted" }, " waits on "), ...R.waiting[t.path].map((x, i) => [i ? ", " : null, taskLink(doc, x, on), h(doc, "span", { class: "dpc-warn" }, ` (due ${fmtD(x.due)})`)]).flat()))));
+  }
+  if (st.spill) {
+    body.append(h(doc, "h4", { class: "dpc-h" }, `Spilled over from last week (${st.spill.length})`, h(doc, "span", { class: "dpc-muted dpc-h-note" }, `logged each Monday in ${st.settings.spilloverFile || "Spillover.md"}`)));
+    body.append(st.spill.length ? h(doc, "ul", { class: "dpc-list" }, st.spill.map(t => h(doc, "li", {}, taskLink(doc, t, on),
+      h(doc, "span", { class: "dpc-muted" }, ` · ${t.project} · was due ${fmtD(t.due)} · ${fmtH(M.remaining(t))} left`)))) : h(doc, "p", { class: "dpc-muted" }, "Everything due last week was finished."));
+  }
 
   const foot = [];
   if (R.unscheduled.length) foot.push(`${R.unscheduled.length} open task${R.unscheduled.length === 1 ? " has" : "s have"} no due date and ${R.unscheduled.length === 1 ? "isn't" : "aren't"} counted.`);
@@ -164,6 +175,7 @@ function renderQueue(body, st, on) {
     renderDoneToday(body, st, on);
     return;
   }
+  renderDays(body, st);
   const tb = h(doc, "tbody");
   const pulled = st.settings.pulled || {};
   R.queue.forEach((t, i) => {
@@ -171,14 +183,16 @@ function renderQueue(body, st, on) {
     tb.append(h(doc, "tr", {},
       h(doc, "td", { class: "dpc-num dpc-muted" }, String(i + 1)),
       h(doc, "td", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority) || "—")),
-      h(doc, "td", { class: "dpc-title-cell" }, taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType, pulled[t.path] ? "added today" : null].filter(Boolean).join(" · ")),
+      h(doc, "td", { class: "dpc-title-cell" }, taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType, pulled[t.path] && pulled[t.path].kind !== "deferred" ? "added today" : null, R.waiting[t.path] ? `waiting on ${R.waiting[t.path].map(x => x.title).join(", ")} (overdue)` : null].filter(Boolean).join(" · ")),
         t.checklist ? h(doc, "div", { class: "dpc-muted dpc-sub" }, `${t.checklist.done}/${t.checklist.total} done-when`) : null),
       h(doc, "td", { class: "dpc-nowrap" + (R.risk[t.path] && R.risk[t.path].overdue ? " dpc-warn" : ""), title: t.due ? null : "No due date" }, relDue(t.due, R.today)),
       h(doc, "td", { class: "dpc-num" }, t.type === "milestone" ? "◆" : fmtH(hrs)),
       h(doc, "td", {}, riskBadge(doc, R.risk[t.path])),
-      h(doc, "td", { class: "dpc-nowrap" }, pulled[t.path] ? h(doc, "button", { class: "dpc-small dpc-undo-pull", title: `Added today; undo puts it back to ${pulled[t.path].start ? "start " + fmtD(pulled[t.path].start) : "no start date"}`,
+      h(doc, "td", { class: "dpc-nowrap dpc-actions" }, pulled[t.path] && pulled[t.path].kind !== "deferred" ? h(doc, "button", { class: "dpc-small dpc-undo-pull", title: `Added today; undo puts it back to ${pulled[t.path].start ? "start " + fmtD(pulled[t.path].start) : "no start date"}`,
           "aria-label": `Undo adding ${t.title} to the queue`, onclick: () => on.undoStart(t.path) }, "Undo add") : null,
-        h(doc, "button", { class: "dpc-done", title: "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓"))));
+        h(doc, "button", { class: "dpc-small", title: "Log time on this task", "aria-label": `Log time on ${t.title}`, onclick: () => on.logTime(t.path) }, "+h"),
+        h(doc, "button", { class: "dpc-small", title: "Move to tomorrow", "aria-label": `Move ${t.title} to tomorrow`, onclick: () => on.notToday(t.path) }, "Not today"),
+        h(doc, "button", { class: "dpc-done", title: t.checklist && t.checklist.done < t.checklist.total ? "Mark done (Done-when not all ticked)" : "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓"))));
   });
   body.append(h(doc, "table", { class: "dpc-table dpc-queue" },
     h(doc, "thead", {}, h(doc, "tr", {}, ["#", "Priority", "Task", "Due", st.mode === "raw" ? "Left" : "Left ×", "", ""].map((c, i) => h(doc, "th", { class: i === 0 || i === 4 ? "dpc-num" : null }, c)))), tb));
@@ -192,8 +206,30 @@ function renderQueue(body, st, on) {
   }
 }
 
+function renderDays(body, st) {
+  const doc = body.ownerDocument, R = st.result;
+  if (!R.days || !R.days.length) return;
+  const max = Math.max(1, ...R.days.map(d => Math.max(d.adj, d.available)));
+  const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  body.append(h(doc, "div", { class: "dpc-days", role: "list", "aria-label": "Committed hours for the next 7 days" }, R.days.map((d, i) => {
+    const over = d.adj > d.available + 0.05;
+    return h(doc, "div", { class: "dpc-day" + (i === 0 ? " is-today" : "") + (over ? " is-over" : ""), role: "listitem",
+      title: `${fmtD(d.date)}: ${fmtH(d.adj)} committed (× multipliers) of about ${fmtH(d.available)} available` },
+      h(doc, "div", { class: "dpc-day-name" }, i === 0 ? "Today" : DOW[new Date(M.toDay(d.date) * 86400000).getUTCDay()]),
+      h(doc, "div", { class: "dpc-day-bar" }, h(doc, "div", { class: "dpc-day-fill", style: `height:${Math.min(100, (d.adj / max) * 100)}%` }),
+        h(doc, "div", { class: "dpc-day-cap", style: `bottom:${Math.min(100, (d.available / max) * 100)}%` })),
+      h(doc, "div", { class: "dpc-day-hrs" }, fmtH(d.adj)));
+  })));
+}
 function renderDoneToday(body, st, on) {
   const doc = body.ownerDocument, R = st.result;
+  const pulled = st.settings.pulled || {};
+  const deferred = st.tasks.filter(t => pulled[t.path] && pulled[t.path].kind === "deferred");
+  if (deferred.length) {
+    body.append(h(doc, "h4", { class: "dpc-h" }, `Moved to tomorrow (${deferred.length})`));
+    body.append(h(doc, "ul", { class: "dpc-list dpc-done-list" }, deferred.map(t => h(doc, "li", {}, h(doc, "span", { class: "dpc-muted", "aria-hidden": "true" }, "→"), taskLink(doc, t, on),
+      h(doc, "span", { class: "dpc-muted" }, ` · ${t.project}`), h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.undoStart(t.path), "aria-label": `Undo: bring ${t.title} back to today` }, "Undo")))));
+  }
   body.append(h(doc, "h4", { class: "dpc-h" }, `Done today (${R.doneToday.length})`, h(doc, "span", { class: "dpc-muted dpc-h-note" }, "clears at midnight")));
   if (!R.doneToday.length) { body.append(h(doc, "p", { class: "dpc-muted" }, "Nothing finished yet today.")); return; }
   body.append(h(doc, "ul", { class: "dpc-list dpc-done-list" }, R.doneToday.map(t =>
@@ -216,6 +252,70 @@ function renderMore(body, st, on, open) {
       h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.startNow(t.path) }, "Start now")))));
 }
 
+// ---------- projects (progress tracker, styled after dotpm's project overview) ----------
+const HEALTH = { "on-track": ["On track", "✓"], watch: ["Watch", "!"], behind: ["Behind", "▲"], done: ["Done", "✓"], empty: ["No tasks", "–"] };
+function renderProjects(body, st, on) {
+  const doc = body.ownerDocument, R = st.result, cfg = st.cfg, today = R.today;
+  const tree = M.projectTree(st.projects || []);
+  const rank = { behind: 0, watch: 1, "on-track": 2, done: 3, empty: 4 };
+  const stats = tree.map(n => M.projectStats(n, st.tasks, cfg, today, R.risk))
+    .sort((a, b) => (a.total ? 0 : 1) - (b.total ? 0 : 1) || rank[a.health] - rank[b.health] || a.node.title.localeCompare(b.node.title));
+  const flat = []; const walk = (s, depth) => { flat.push([s, depth]); s.kids.forEach(k => walk(k, depth + 1)); }; stats.forEach(s => walk(s, 0));
+  const count = k => flat.filter(([s]) => s.health === k).length;
+  body.append(h(doc, "div", { class: "dpc-toolbar" },
+    h(doc, "span", { class: "dpc-muted" }, `${flat.length} projects · ${count("behind")} behind · ${count("watch")} to watch · ${count("on-track")} on track`),
+    h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.newFromTemplate() }, "+ From template")));
+  if (!flat.length) { body.append(h(doc, "p", { class: "dpc-muted" }, "No projects yet.")); return; }
+  const list = h(doc, "div", { class: "dpc-projects" });
+  for (const [s, depth] of flat) list.append(projectCard(doc, s, depth, st, on));
+  body.append(list);
+}
+function projectCard(doc, s, depth, st, on) {
+  const R = st.result, cfg = st.cfg, n = s.node, open = st.openProjects && st.openProjects.has(n.path);
+  const [hl, hi] = HEALTH[s.health];
+  const pct = v => `${Math.round(v * 100)}%`;
+  const sub = s.kids.length ? ` · incl. ${s.kids.length} sub-project${s.kids.length === 1 ? "" : "s"}` : "";
+  const stat = (label, value, note, cls) => h(doc, "div", { class: "dpc-pstat" + (cls ? " " + cls : "") },
+    h(doc, "div", { class: "dpc-pstat-label" }, label), h(doc, "div", { class: "dpc-pstat-value" }, value), h(doc, "div", { class: "dpc-pstat-note" }, note));
+  const head = h(doc, "div", { class: "dpc-phead" },
+    h(doc, "div", { class: "dpc-picon", style: n.color ? `--dpc-pc:${n.color}` : null, "aria-hidden": "true" }, n.icon || "📋"),
+    h(doc, "div", { class: "dpc-ptitle-wrap" },
+      h(doc, "div", { class: "dpc-ptitle" }, h(doc, "a", { href: "#", class: "dpc-task-link", onclick: e => { e.preventDefault(); on.openProjectNote(n.path); } }, n.title),
+        h(doc, "span", { class: `dpc-health dpc-health-${s.health}` }, h(doc, "span", { "aria-hidden": "true" }, hi), hl)),
+      h(doc, "div", { class: "dpc-muted dpc-sub" }, s.total ? `${s.done} of ${s.total} task${s.total === 1 ? "" : "s"} done${sub}${s.nextDue ? ` · next due ${fmtD(s.nextDue.due)}` : ""}` : "No tasks yet — add one with Quick add")));
+  const plannedNote = s.planned == null ? "no dates yet" : s.gap >= 0.005 ? `${pct(s.gap)} ahead of plan` : s.gap <= -0.005 ? `${pct(-s.gap)} behind plan (${pct(s.planned)} planned)` : "on plan";
+  const grid = h(doc, "div", { class: "dpc-pgrid" },
+    stat("Progress", pct(s.actual), plannedNote, null),
+    stat("Tasks", `${s.done} of ${s.total}`, "done", null),
+    stat("Overdue", String(s.overdue.length), s.atRisk.length ? `tasks past due · ${s.atRisk.length} at risk` : "tasks past due", s.overdue.length ? "is-bad" : null),
+    stat("Time", `${fmtH(s.logged).replace("h", "")}/${fmtH(s.estimate)}`, "logged / estimate", null));
+  const bar = h(doc, "div", { class: "dpc-pbar", role: "img", "aria-label": `${pct(s.actual)} done${s.planned != null ? `, ${pct(s.planned)} planned by today` : ""}` },
+    h(doc, "div", { class: "dpc-pbar-fill", style: `width:${Math.min(100, s.actual * 100)}%` }),
+    s.planned != null ? h(doc, "div", { class: "dpc-pbar-plan", style: `left:${Math.min(100, s.planned * 100)}%`, title: `Planned by today: ${pct(s.planned)}` }) : null);
+  const ms = s.milestones.length ? h(doc, "div", { class: "dpc-pms" }, h(doc, "span", { class: "dpc-pstat-label" }, "Milestones"),
+    s.milestones.map(m => h(doc, "button", { class: `dpc-ms-chip is-${m.state}`, onclick: () => on.openTask(m.task.path), title: m.state === "missed" ? "Past its date and not done" : m.state === "done" ? "Done" : "Upcoming" },
+      h(doc, "span", { "aria-hidden": "true" }, m.state === "done" ? "◆ ✓" : "◆"), ` ${m.task.title}`, h(doc, "span", { class: "dpc-muted" }, m.task.due ? ` · ${fmtD(m.task.due)}` : "")))) : null;
+  const desc = n.description ? h(doc, "div", { class: "dpc-pdesc" }, n.description.split("\n").filter(Boolean)[0].replace(/\*\*/g, "")) : null;
+  const toggle = h(doc, "button", { class: "dpc-ptoggle", "aria-expanded": !!open, onclick: () => on.toggleProject(n.path) },
+    h(doc, "span", { class: "dpc-caret", "aria-hidden": "true" }, open ? "▾" : "▸"), `Tasks (${s.own.length}${s.kids.length ? ` here · ${s.total} with sub-projects` : ""})`);
+  if (!s.total) return h(doc, "section", { class: "dpc-pcard is-empty", style: `--dpc-depth:${depth}`, "aria-label": n.title }, head);
+  const card = h(doc, "section", { class: "dpc-pcard", style: `--dpc-depth:${depth}`, "aria-label": n.title }, head, grid, bar, ms, desc, toggle);
+  if (open) {
+    const tasks = s.own.slice().sort((a, b) => (M.isComplete(cfg, a.status) - M.isComplete(cfg, b.status)) || (a.due || "9999").localeCompare(b.due || "9999") || M.priorityRank(cfg, a.priority) - M.priorityRank(cfg, b.priority));
+    card.append(tasks.length ? h(doc, "ul", { class: "dpc-ptasks" }, tasks.map(t => {
+      const stc = cfg.statuses.find(x => x.id === t.status);
+      const done = M.isComplete(cfg, t.status), prog = done ? 100 : Math.max(0, Math.min(100, t.progress || 0));
+      return h(doc, "li", { class: done ? "is-done" : "" },
+        h(doc, "span", { class: "dpc-status", style: `--dpc-sc:${(stc && stc.color) || "var(--text-faint)"}` }, stc ? stc.label : t.status),
+        h(doc, "span", { class: "dpc-ptask-title" }, t.type === "milestone" ? "◆ " : null, taskLink(doc, t, on), " ", riskBadge(doc, R.risk[t.path])),
+        h(doc, "span", { class: "dpc-muted dpc-nowrap" + (!done && t.due && t.due < R.today ? " dpc-warn" : "") }, t.due ? fmtD(t.due) : ""),
+        h(doc, "span", { class: "dpc-muted dpc-num" }, t.estimate != null ? `${fmtH(t.logged).replace("h", "")}/${fmtH(t.estimate)}` : ""),
+        h(doc, "span", { class: "dpc-ptask-prog", role: "img", "aria-label": `${prog}% done` }, h(doc, "span", { style: `width:${prog}%` })));
+    })) : h(doc, "p", { class: "dpc-muted dpc-ptasks-empty" }, s.kids.length ? "No tasks directly in this project; see its sub-projects below." : "No tasks yet."));
+  }
+  return card;
+}
+
 // ---------- board ----------
 // Styled after dotpm's own kanban: colored column tops with count pills, compact cards with hours,
 // progress, a project chip and the due date. Actions (✓, Move…) show on hover, always on touch screens.
@@ -226,7 +326,8 @@ function renderBoard(body, st, on) {
     h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board view" }, [["today", "Today"], ["week", "By week"]].map(([id, name]) =>
       h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
     h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates."
-      : "Started tasks, best priority first. Finish them here or pull in more.")));
+      : "Started tasks, best priority first. Finish them here or pull in more."),
+    h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.quickAdd(), title: "Quick add a task (command: Quick add task)" }, "+ Quick add")));
   if (mode === "today") { renderQueue(body, st, on); return; }
   const cols = R.board.map(c => ({ ...c, color: c.key === "overdue" ? "var(--dpc-risk)" : c.week && c.week.overloaded ? "var(--dpc-over)" : c.week && c.week.isCurrent ? "var(--interactive-accent, var(--text-accent))" : "var(--text-faint)" }));
   const targets = R.board.filter(c => c.week).map(c => ({ key: c.key, label: c.week.isCurrent ? "This week" : `${c.key.slice(5)} · ${fmtD(c.week.start)}` }));

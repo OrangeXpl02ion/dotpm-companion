@@ -299,8 +299,24 @@ function compute(tasks, cfg, settings, today) {
     .sort((a, b) => priorityRank(cfg, a.priority) - priorityRank(cfg, b.priority) || a.start.localeCompare(b.start) || (a.due || "9999").localeCompare(b.due || "9999"));
   const doneToday = tasks.filter(t => isComplete(cfg, t.status) && t.completed === today).sort((a, b) => a.title.localeCompare(b.title));
   const blocked = new Set(open.filter(t => !ready(t)).map(t => t.path));
+  // waiting on an overdue task: an unfinished dependency whose due date has passed
+  const waiting = {};
+  for (const t of open) {
+    const late = (t.deps || []).map(d => byName.get(d)).filter(x => x && !isComplete(cfg, x.status) && x.due && x.due < today);
+    if (late.length) waiting[t.path] = late;
+  }
+  // next 7 days: committed hours (× multipliers) per day against that day's share of the week
+  const days = [];
+  for (let i = 0; i < 7; i++) days.push({ date: addDays(today, i), adj: 0, available: availableOnDay(cap, addDays(today, i), fallback) });
+  const dayIdx = Object.fromEntries(days.map((d, i) => [d.date, i]));
+  for (const t of open) {
+    const raw = remaining(t); if (raw <= 0) continue;
+    const s = spread(t, raw, today); if (!s) continue;
+    const f = adjusted(t, mults) / raw;
+    for (const [d, hh] of s) if (d in dayIdx) days[dayIdx[d]].adj += hh * f;
+  }
   return { today, weeks, risk, queue, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
-    candidates, doneToday, blocked, board: board(open, cfg, settings, weeks, today) };
+    candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today) };
 }
 
 // Board columns. By week: the week a task is due (overdue, this week onward, later, no due date).
@@ -330,6 +346,242 @@ function shiftToWeek(t, weekStart) {
   return out;
 }
 
+
+// ---------- projects (progress tracker) ----------
+// projects: [{ path, title, icon, color, parent: "[[Project/…/X]]", description }]
+function parentPath(link) { const m = typeof link === "string" && link.match(/^\[\[([^\]|]+)(?:\|[^\]]*)?\]\]$/); return m ? m[1].replace(/\.md$/, "") + ".md" : null; }
+function projectTree(projects) {
+  const byPath = new Map(projects.map(p => [p.path, { ...p, children: [] }]));
+  const roots = [];
+  for (const p of byPath.values()) {
+    const pp = parentPath(p.parent);
+    if (pp && byPath.has(pp) && pp !== p.path) byPath.get(pp).children.push(p); else roots.push(p);
+  }
+  const sort = list => { list.sort((a, b) => a.title.localeCompare(b.title)); for (const x of list) sort(x.children); };
+  sort(roots);
+  return roots;
+}
+function taskShare(t, cfg) { return isComplete(cfg, t.status) ? 1 : Math.max(0, Math.min(1, (t.progress || 0) / 100)); }
+// How far along a task should be by today: share of its start→due window that has passed.
+function plannedShare(t, today) {
+  if (!t.due) return null;
+  const s = t.start || t.due;
+  if (today >= t.due) return 1;
+  if (today < s) return 0;
+  return (diffDays(s, today) + 1) / (diffDays(s, t.due) + 1);
+}
+function projectStats(node, tasks, cfg, today, risk) {
+  const own = tasks.filter(t => t.project === node.title);
+  const kids = node.children.map(c => projectStats(c, tasks, cfg, today, risk));
+  const all = own.concat(...kids.map(k => k.all));
+  const done = all.filter(t => isComplete(cfg, t.status)).length;
+  const open = all.filter(t => !isComplete(cfg, t.status));
+  // weights: estimate when known, else 1
+  const w = t => (t.estimate > 0 ? t.estimate : 1);
+  const W = all.reduce((a, t) => a + w(t), 0);
+  const actual = W ? all.reduce((a, t) => a + w(t) * taskShare(t, cfg), 0) / W : 0;
+  const dated = all.filter(t => t.due);
+  const WD = dated.reduce((a, t) => a + w(t), 0);
+  const planned = WD ? dated.reduce((a, t) => a + w(t) * plannedShare(t, today), 0) / WD : null;
+  const overdue = open.filter(t => t.due && t.due < today);
+  const atRisk = open.filter(t => risk && risk[t.path]);
+  const milestones = all.filter(t => t.type === "milestone").sort((a, b) => (a.due || "9999").localeCompare(b.due || "9999"))
+    .map(t => ({ task: t, state: isComplete(cfg, t.status) ? "done" : t.due && t.due < today ? "missed" : "upcoming" }));
+  const nextDue = open.filter(t => t.due && t.due >= today).sort((a, b) => a.due.localeCompare(b.due))[0] || null;
+  const lastDue = dated.map(t => t.due).sort().pop() || null;
+  const gap = planned == null ? 0 : actual - planned;
+  const health = !all.length ? "empty" : !open.length ? "done" : overdue.length || gap < -0.25 ? "behind" : atRisk.length || gap < -0.1 ? "watch" : "on-track";
+  return {
+    node, own, all, kids, total: all.length, done, open: open.length, actual, planned, gap, health,
+    overdue, atRisk, milestones, nextDue, lastDue,
+    logged: all.reduce((a, t) => a + t.logged, 0), estimate: all.reduce((a, t) => a + (t.estimate || 0), 0),
+  };
+}
+
+// ---------- quick-add ----------
+const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+const MONTHS3 = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+function weekdayOf(d) { return new Date(toDay(d) * DAY).getUTCDay(); }
+function nextWeekday(today, idx) { const n = (idx - weekdayOf(today) + 7) % 7; return addDays(today, n); }
+function dateFromMonthDay(today, m, d) {
+  const y = Number(today.slice(0, 4));
+  const pad = n => String(n).padStart(2, "0");
+  let s = `${y}-${pad(m)}-${pad(d)}`;
+  if (!isDate(s) || isNaN(toDay(s))) return null;
+  if (s < addDays(today, -60)) s = `${y + 1}-${pad(m)}-${pad(d)}`; // "jan 5" in December means next year
+  return s;
+}
+// "render kettle hero shot fri 3h p1 #cad" → { title, project, due, estimate, priority, workType, tags }
+function parseQuickAdd(text, ctx) {
+  const today = ctx.today, out = { title: "", project: null, due: null, start: null, estimate: null, priority: null, workType: null, tags: [] };
+  let rest = " " + String(text || "").trim() + " ";
+  // project: @name (fuzzy) or a full project title in the text (longest first)
+  const projects = (ctx.projects || []).slice().sort((a, b) => b.length - a.length);
+  const at = rest.match(/\s@([^\s]+)/);
+  if (at) {
+    const q = at[1].toLowerCase();
+    const hit = projects.find(p => p.toLowerCase() === q) || projects.find(p => p.toLowerCase().replace(/\s+/g, "").startsWith(q)) || projects.find(p => p.toLowerCase().includes(q));
+    if (hit) { out.project = hit; rest = rest.replace(at[0], " "); }
+  }
+  if (!out.project) for (const p of projects) {
+    const re = new RegExp(`(^|\\s)${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=\\s)`, "i");
+    if (re.test(rest)) { out.project = p; break; } // keep the word in the title ("render kettle hero")
+  }
+  const take = (re, fn) => { rest = rest.replace(re, (...m) => { const r = fn(...m); return r === false ? m[0] : " "; }); };
+  take(/\s(\d+(?:\.\d+)?)\s?(h|hr|hrs|hours?)(?=\s)/i, (m, n) => { out.estimate = parseFloat(n); });
+  if (out.estimate == null) take(/\s(\d+)\s?(m|min|mins|minutes?)(?=\s)/i, (m, n) => { out.estimate = Math.round(parseFloat(n) / 6) / 10; });
+  take(/\sp([1-4])(?=\s)/i, (m, n) => { const p = (ctx.priorities || [])[Number(n) - 1]; if (!p) return false; out.priority = p; });
+  take(/\s#([^\s#]+)/g, (m, tag) => {
+    const wt = (ctx.workTypes || []).find(w => w.toLowerCase() === tag.toLowerCase());
+    if (wt && !out.workType) out.workType = wt; else out.tags.push(tag);
+  });
+  // dates
+  const setDue = d => { if (d && !out.due) out.due = d; };
+  take(/\s(today|tod)(?=\s)/i, () => setDue(today));
+  take(/\s(tomorrow|tmr|tom)(?=\s)/i, () => setDue(addDays(today, 1)));
+  take(/\s\+(\d+)\s?([dw])(?=\s)/i, (m, n, u) => setDue(addDays(today, Number(n) * (u.toLowerCase() === "w" ? 7 : 1))));
+  take(/\s(next\s+week)(?=\s)/i, () => setDue(addDays(mondayOf(addDays(today, 7)), 4)));
+  take(/\s([a-z]{3,9})\.?\s+(\d{1,2})(?=\s)/i, (m, mon, d) => { const i = MONTHS3.indexOf(mon.slice(0, 3).toLowerCase()); if (i === -1) return false; const r = dateFromMonthDay(today, i + 1, Number(d)); if (!r) return false; setDue(r); });
+  take(/\s(\d{1,2})\s+([a-z]{3,9})(?=\s)/i, (m, d, mon) => { const i = MONTHS3.indexOf(mon.slice(0, 3).toLowerCase()); if (i === -1) return false; const r = dateFromMonthDay(today, i + 1, Number(d)); if (!r) return false; setDue(r); });
+  take(/\s(\d{1,2})\/(\d{1,2})(?=\s)/, (m, mo, d) => { const r = dateFromMonthDay(today, Number(mo), Number(d)); if (!r) return false; setDue(r); });
+  take(/\s(\d{4}-\d{2}-\d{2})(?=\s)/, (m, d) => { if (!isDate(d)) return false; setDue(d); });
+  take(/\s(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(day)?(?=\s)/i, (m, d) => setDue(nextWeekday(today, WEEKDAYS.indexOf(d.slice(0, 3).toLowerCase()))));
+  // a work-type tag that names a project files the task there (#fun → Fun)
+  if (!out.project && out.workType) out.project = projects.find(p => p.toLowerCase() === out.workType.toLowerCase()) || null;
+  const title = rest.replace(/\s+/g, " ").trim();
+  out.title = title ? title[0].toUpperCase() + title.slice(1) : "";
+  return out;
+}
+
+// ---------- time log input ----------
+// "2h", "1.5", "90m", "1h30m", "2h -- note", "2h fixed the hinge"
+function parseLogInput(text) {
+  const s = String(text || "").trim();
+  const m = s.match(/^(?:(\d+(?:\.\d+)?)\s*h(?:ours?|rs?)?\s*(?:(\d+)\s*m(?:in)?)?|(\d+)\s*m(?:in)?|(\d+(?:\.\d+)?))(?=\s|$)\s*(?:--\s*)?(.*)$/i);
+  if (!m) return null;
+  let hours = m[1] != null ? parseFloat(m[1]) + (m[2] ? Number(m[2]) / 60 : 0) : m[3] != null ? Number(m[3]) / 60 : parseFloat(m[4]);
+  if (!(hours > 0) || hours > 24) return null;
+  return { hours: Math.round(hours * 100) / 100, note: (m[5] || "").trim() };
+}
+
+// ---------- schedule change log ----------
+// prev/cur: { start, due }. Returns a list of { field, from, to }.
+function dateChanges(prev, cur) {
+  const out = [];
+  for (const f of ["start", "due"]) if ((prev[f] || null) !== (cur[f] || null)) out.push({ field: f, from: prev[f] || null, to: cur[f] || null });
+  return out;
+}
+function describeChange(ch) { return ch.map(c => `${c.field} ${c.from ? c.from.slice(5) : "—"} → ${c.to ? c.to.slice(5) : "—"}`).join(", "); }
+// group: [{ task, changes, reason }], first = cause. Returns table rows for Schedule log.md.
+function scheduleRows(group, when) {
+  if (!group.length) return [];
+  const first = group[0];
+  const rows = [];
+  const why = (g, i) => g.reason ? g.reason : i === 0 ? (group.length > 1 ? "changed; moved the tasks below" : "moved by hand") : `knock-on from ${first.task.title}`;
+  group.forEach((g, i) => rows.push(`| ${when} | ${esc(g.task.title)} | ${esc(g.task.project || "")} | ${describeChange(g.changes)} | ${esc(why(g, i))} |`));
+  return rows;
+}
+function esc(s) { return String(s).replace(/\|/g, "\\|"); }
+const SCHEDULE_HEADER = "# Schedule log\n\nWritten by the dotpm Companion: every change to a task's start or due date, newest first. Changes within a couple of seconds are grouped; the first is the cause.\n\n| When | Task | Project | Change | Cause |\n| --- | --- | --- | --- | --- |\n";
+function prependRows(md, header, rows) {
+  if (!md || !md.includes("| --- |")) return header + rows.join("\n") + "\n";
+  const i = md.indexOf("\n", md.indexOf("| --- |")) + 1;
+  return md.slice(0, i) + rows.join("\n") + "\n" + md.slice(i);
+}
+
+// ---------- spillover ----------
+// Tasks due in the week before weekStart that aren't done.
+function spillover(tasks, cfg, weekStart) {
+  const from = addDays(weekStart, -7), to = addDays(weekStart, -1);
+  return tasks.filter(t => t.due && t.due >= from && t.due <= to && !isComplete(cfg, t.status))
+    .sort((a, b) => a.due.localeCompare(b.due));
+}
+const SPILLOVER_HEADER = "# Spillover\n\nWritten by the dotpm Companion each Monday: tasks due last week that weren't done, with the hours left. Newest first.\n\n| Week | Task | Project | Was due | Hours left |\n| --- | --- | --- | --- | --- |\n";
+function spilloverRows(list, week) {
+  if (!list.length) return [`| ${week} | (nothing spilled over) |  |  |  |`];
+  return list.map(t => `| ${week} | ${esc(t.title)} | ${esc(t.project || "")} | ${t.due} | ${Math.round(remaining(t) * 10) / 10} |`);
+}
+
+// ---------- project templates ----------
+// A template note has a table: | Task | Work type | Hours | Start day | Days | After | Done when |
+// Start day = days after the project start (0 = first day); After = task names (comma separated) it waits on.
+function parseTemplate(md) {
+  const lines = String(md || "").split(/\r?\n/).filter(l => /^\s*\|/.test(l));
+  if (lines.length < 2) return [];
+  const cells = l => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
+  const head = cells(lines[0]).map(c => c.toLowerCase());
+  const col = (...names) => head.findIndex(h => names.some(n => h.includes(n)));
+  const ci = { task: col("task", "title"), type: col("work", "type"), hours: col("hour", "estimate"), start: col("start"), days: col("day"), after: col("after", "depend"), done: col("done") };
+  if (ci.days === ci.start) ci.days = head.findIndex((h, i) => h.includes("day") && i !== ci.start);
+  const out = [];
+  for (const l of lines.slice(1)) {
+    const c = cells(l);
+    if (c.every(x => /^:?-+:?$/.test(x) || !x)) continue;
+    const title = c[ci.task];
+    if (!title) continue;
+    out.push({
+      title, workType: ci.type >= 0 ? c[ci.type] || null : null,
+      hours: ci.hours >= 0 && isFinite(parseFloat(c[ci.hours])) ? parseFloat(c[ci.hours]) : null,
+      startDay: ci.start >= 0 && isFinite(parseInt(c[ci.start])) ? parseInt(c[ci.start]) : 0,
+      days: ci.days >= 0 && isFinite(parseInt(c[ci.days])) ? Math.max(1, parseInt(c[ci.days])) : 1,
+      after: ci.after >= 0 && c[ci.after] ? c[ci.after].split(/\s*,\s*/).filter(Boolean) : [],
+      doneWhen: ci.done >= 0 && c[ci.done] ? c[ci.done].split(/\s*;\s*/).filter(Boolean) : [],
+    });
+  }
+  return out;
+}
+function templateTasks(rows, projectStart) {
+  return rows.map(r => ({ ...r, start: addDays(projectStart, r.startDay), due: addDays(projectStart, r.startDay + r.days - 1) }));
+}
+
+
+// ---------- file fallbacks (used only when dotpm's store isn't available) ----------
+function slug(title) { return String(title).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 80) || "task"; }
+function yq(v) { return JSON.stringify(String(v)); }
+function taskFile(t, projectTitle) {
+  const fm = ["---", "pm-task: true", `projectId: ${yq(`[[${projectTitle}|${projectTitle}]]`)}`, "parentId:", `id: ${yq(t.id)}`, `title: ${yq(t.title)}`, `type: "task"`,
+    `status: ${yq(t.status)}`, `priority: ${yq(t.priority)}`, `start: ${yq(t.start)}`, `due: ${yq(t.due)}`, "progress: 0", "assignees: []",
+    `tags: [${(t.tags || []).map(yq).join(", ")}]`, "subtaskIds: []", "dependencies: []", `createdAt: ${yq(t.createdAt)}`, `updatedAt: ${yq(t.updatedAt)}`];
+  if (t.timeEstimate != null) fm.push(`timeEstimate: ${t.timeEstimate}`);
+  const cf = Object.entries(t.customFields || {});
+  if (cf.length) { fm.push("customFields:"); for (const [k, v] of cf) fm.push(`  ${k}: ${yq(v)}`); }
+  fm.push("---");
+  return fm.join("\n") + "\n\n" + (t.description ? t.description + "\n\n" : "") + `Project: [[${projectTitle}|${projectTitle}]]\n`;
+}
+// Add one entry to the timeLogs list in the frontmatter (block style), creating the key if needed.
+function appendTimeLog(text, log) {
+  const m = text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!m) return text;
+  const nl = text.includes("\r\n") ? "\r\n" : "\n";
+  const lines = m[1].split(/\r?\n/);
+  const entry = [`  - date: ${log.date}`, `    hours: ${log.hours}`, `    note: ${yq(log.note || "")}`];
+  let i = lines.findIndex(l => /^timeLogs:/.test(l));
+  if (i === -1) lines.push("timeLogs:", ...entry);
+  else {
+    if (/^timeLogs:\s*\[\s*\]\s*$/.test(lines[i])) lines[i] = "timeLogs:";
+    let j = i + 1; while (j < lines.length && /^\s+/.test(lines[j])) j++;
+    lines.splice(j, 0, ...entry);
+  }
+  return `---${nl}${lines.join(nl)}${nl}---` + text.slice(m[0].length);
+}
+const EXAMPLE_TEMPLATE = `# Case study template
+
+Used by **dotpm Companion → New project from template**. Each row becomes a task.
+*Start day* counts from the project's start date (0 = first day), *Days* is how long it runs,
+*After* lists tasks it waits on (comma separated), *Done when* items are separated by semicolons.
+
+| Task | Work type | Hours | Start day | Days | After | Done when |
+| --- | --- | --- | --- | --- | --- | --- |
+| Brief and framing | Writing | 4 | 0 | 4 |  | Angle written; persona; positioning map |
+| Research and references | Research | 4 | 0 | 4 |  | Competitors and references collected |
+| Form concepting | Concepting | 8 | 4 | 5 | Brief and framing | Sketches scanned; direction chosen |
+| CAD | CAD | 12 | 9 | 7 | Form concepting | Assembly complete; ready to render |
+| Prototype | Fabrication | 6 | 16 | 4 | CAD | Printed or built; photographed |
+| Renders | Render | 10 | 16 | 5 | CAD | Hero; exploded; in context |
+| Decision notes | Writing | 4 | 16 | 5 | CAD | 3–4 notes that explain why |
+| Case study page | Concepting | 8 | 21 | 4 | Renders, Decision notes, Prototype | Page published; 30-second test passes |
+`;
+
 // ---------- file text ----------
 function bodyOf(text) {
   const m = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
@@ -358,4 +610,7 @@ module.exports = {
   typeKey, multiplierFor, remaining, adjusted, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute,
   linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek,
+  parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,
+  dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
+  parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,
 };

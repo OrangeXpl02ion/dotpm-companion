@@ -190,3 +190,55 @@ test("board columns and moving between weeks", () => {
   assert.deepEqual(M.shiftToWeek({ start: null, due: null }, "2026-11-02"), { due: "2026-11-06" });
   assert.equal(M.shiftToWeek({ due: "2026-11-27" }, "2026-11-23"), null);
 });
+
+test("project stats roll up sub-projects, planned vs actual and milestones", () => {
+  const projects = [
+    { path: "P/Studio/Studio.md", title: "Studio", parent: null },
+    { path: "P/Studio/G/G.md", title: "Gardening", parent: "[[P/Studio/Studio]]" },
+  ];
+  const tr = M.projectTree(projects);
+  assert.equal(tr.length, 1); assert.equal(tr[0].children[0].title, "Gardening");
+  const T = (o) => ({ status: "todo", progress: 0, logged: 0, estimate: 4, type: "task", deps: [], ...o });
+  const ts = [
+    T({ path: "1", project: "Gardening", start: "2026-10-01", due: "2026-10-10", status: "done", logged: 5 }),
+    T({ path: "2", project: "Gardening", start: "2026-10-15", due: "2026-10-24", progress: 50 }),
+    T({ path: "3", project: "Gardening", due: "2026-10-18", type: "milestone", estimate: null }),
+    T({ path: "4", project: "Studio", start: "2026-11-01", due: "2026-11-05" }),
+  ];
+  const s = M.projectStats(tr[0], ts, cfg, "2026-10-20", {});
+  assert.equal(s.total, 4); assert.equal(s.done, 1); assert.equal(s.overdue.length, 1);
+  assert.equal(s.milestones[0].state, "missed");
+  assert.equal(s.kids[0].total, 3);
+  assert.ok(s.planned > s.actual, "behind plan");
+  assert.equal(s.health, "behind");
+  assert.equal(s.logged, 5);
+});
+
+test("quick-add parsing", () => {
+  const ctx = { today: "2026-10-20", projects: ["Kettle", "Gardening Studio", "Fun"], workTypes: ["CAD", "Fun"], priorities: ["critical", "high", "medium", "low"] };
+  const q = M.parseQuickAdd("render kettle hero shot fri 3h p1 #cad", ctx);
+  assert.deepEqual([q.title, q.project, q.due, q.estimate, q.priority, q.workType], ["Render kettle hero shot", "Kettle", "2026-10-23", 3, "critical", "CAD"]);
+  assert.equal(M.parseQuickAdd("sketch nov 9 90m @gard", ctx).project, "Gardening Studio");
+  assert.equal(M.parseQuickAdd("sketch nov 9 90m @gard", ctx).estimate, 1.5);
+  assert.equal(M.parseQuickAdd("tickets #fun", ctx).project, "Fun");
+  assert.equal(M.parseQuickAdd("plan jan 5", { ...ctx, today: "2026-12-20" }).due, "2027-01-05");
+  assert.equal(M.parseQuickAdd("call +2w", ctx).due, "2026-11-03");
+});
+
+test("time log input", () => {
+  assert.deepEqual(M.parseLogInput("1h30m -- glued legs"), { hours: 1.5, note: "glued legs" });
+  assert.deepEqual(M.parseLogInput("45m"), { hours: 0.75, note: "" });
+  assert.equal(M.parseLogInput("soon"), null);
+  assert.equal(M.parseLogInput("30"), null, "over 24h is rejected");
+});
+
+test("spillover and templates", () => {
+  const ts = [{ title: "a", project: "K", due: "2026-10-14", status: "todo", estimate: 4, logged: 1 }, { title: "b", project: "K", due: "2026-10-14", status: "done", estimate: 1, logged: 1 }, { title: "c", project: "K", due: "2026-10-20", status: "todo", estimate: 1, logged: 0 }];
+  const sp = M.spillover(ts, cfg, "2026-10-19");
+  assert.deepEqual(sp.map(t => t.title), ["a"]);
+  assert.match(M.spilloverRows(sp, "2026-W42")[0], /\| 2026-W42 \| a \| K \| 2026-10-14 \| 3 \|/);
+  const rows = M.templateTasks(M.parseTemplate(M.EXAMPLE_TEMPLATE), "2026-11-02");
+  assert.equal(rows.length, 8);
+  assert.deepEqual([rows[3].title, rows[3].start, rows[3].due, rows[3].after], ["CAD", "2026-11-11", "2026-11-17", ["Form concepting"]]);
+  assert.equal(M.prependRows(M.prependRows("", M.SCHEDULE_HEADER, ["| 1 |"]), M.SCHEDULE_HEADER, ["| 2 |"]).split("| --- | --- | --- | --- | --- |\n")[1], "| 2 |\n| 1 |\n");
+});

@@ -5,7 +5,7 @@ const Module = require("module");
 class TFile { constructor(path) { this.path = path; } }
 const el = () => ({ cls: [], attrs: {}, parent: null, get isConnected() { return !!this.parent; }, addClass(c) { this.cls.push(c); }, setAttribute(k, v) { this.attrs[k] = v; }, remove() { this.parent = null; } });
 const stub = { Plugin: class { constructor(app) { this.app = app; } }, ItemView: class { constructor(leaf) { this.leaf = leaf; this.app = leaf.app; this.contentEl = { empty() {} }; } },
-  PluginSettingTab: class {}, Setting: class {}, Notice: class {}, TFile, normalizePath: x => x, debounce: f => f };
+  PluginSettingTab: class {}, Setting: class {}, Modal: class {}, FuzzySuggestModal: class {}, TFolder: class {}, Platform: { isDesktopApp: true }, Notice: class {}, TFile, normalizePath: x => x, debounce: f => f };
 const orig = Module._load;
 Module._load = function (r, ...a) { return r === "obsidian" ? stub : orig.call(this, r, ...a); };
 global.document = { createDocumentFragment: () => ({ append() {} }), createElement: () => ({ addEventListener() {} }) };

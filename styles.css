@@ -166,3 +166,62 @@
 .dpc-embed-host > .dpc-embedded { flex: 1; min-height: 0; height: auto; display: flex; flex-direction: column; }
 .dpc-embed-host > .dpc-embedded > .view-header { display: none; }
 .dpc-embed-host > .dpc-embedded > .view-content { flex: 1; min-height: 0; }
+
+/* Today: next 7 days */
+.dpc-days { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; margin: 4px 0 12px; }
+.dpc-day { background: var(--background-secondary); border-radius: 8px; padding: 6px 6px 5px; text-align: center; }
+.dpc-day.is-today { box-shadow: 0 0 0 1px var(--interactive-accent, var(--text-accent)); }
+.dpc-day-name { font-size: 0.85em; color: var(--text-muted); }
+.dpc-day-bar { position: relative; height: 40px; margin: 4px auto; width: 60%; background: var(--background-modifier-border); border-radius: 4px; overflow: hidden; }
+.dpc-day-fill { position: absolute; left: 0; right: 0; bottom: 0; background: var(--dpc-s1); border-radius: 4px 4px 0 0; }
+.dpc-day.is-over .dpc-day-fill { background: var(--dpc-over); }
+.dpc-day-cap { position: absolute; left: -2px; right: -2px; border-top: 2px dashed var(--text-muted); }
+.dpc-day-hrs { font-size: 0.85em; font-variant-numeric: tabular-nums; }
+.dpc-actions { display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
+/* Projects */
+.dpc-projects { display: flex; flex-direction: column; gap: 12px; }
+.dpc-pcard { margin-left: calc(var(--dpc-depth, 0) * 24px); background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 10px; padding: 14px 16px 10px; }
+.dpc-phead { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.dpc-picon { flex: none; width: 40px; height: 40px; border-radius: 10px; display: grid; place-items: center; font-size: 20px; background: color-mix(in srgb, var(--dpc-pc, var(--text-faint)) 22%, var(--background-secondary)); }
+.dpc-ptitle-wrap { min-width: 0; }
+.dpc-ptitle { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; font-size: 1.15em; font-weight: 600; }
+.dpc-health { display: inline-flex; align-items: center; gap: 4px; font-size: 0.72em; font-weight: 600; padding: 1px 8px; border-radius: 10px; background: var(--background-secondary); color: var(--text-muted); }
+.dpc-health-on-track, .dpc-health-done { color: var(--color-green); background: color-mix(in srgb, var(--color-green) 12%, transparent); }
+.dpc-health-watch { color: var(--dpc-over); background: color-mix(in srgb, var(--dpc-over) 12%, transparent); }
+.dpc-health-behind { color: var(--dpc-risk); background: color-mix(in srgb, var(--dpc-risk) 12%, transparent); }
+.dpc-pgrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--background-modifier-border); border-radius: 10px; padding: 12px 0; }
+.dpc-pstat { padding: 0 16px; border-left: 1px solid var(--background-modifier-border); }
+.dpc-pstat:first-child { border-left: 0; }
+.dpc-pstat-label { font-size: 0.78em; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-muted); }
+.dpc-pstat-value { font-size: 1.15em; font-weight: 600; margin: 4px 0 2px; font-variant-numeric: tabular-nums; }
+.dpc-pstat-note { font-size: 0.88em; color: var(--text-faint); }
+.dpc-pstat.is-bad .dpc-pstat-value { color: var(--dpc-risk); }
+.dpc-pbar { position: relative; height: 6px; border-radius: 3px; background: var(--background-modifier-border); margin: 12px 0 4px; }
+.dpc-pbar-fill { height: 100%; border-radius: 3px; background: var(--interactive-accent, var(--text-accent)); }
+.dpc-pbar-plan { position: absolute; top: -4px; bottom: -4px; width: 2px; background: var(--text-normal); border-radius: 1px; }
+.dpc-pms { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 10px; }
+.dpc-pms .dpc-pstat-label { margin-right: 4px; }
+.dpc-ms-chip { height: auto; padding: 2px 8px; font-size: 0.88em; border-radius: 12px; box-shadow: none; border: 1px solid var(--background-modifier-border); background: var(--background-secondary); }
+.dpc-ms-chip.is-done { color: var(--color-green); }
+.dpc-ms-chip.is-missed { color: var(--dpc-risk); border-color: color-mix(in srgb, var(--dpc-risk) 40%, transparent); }
+.dpc-pdesc { margin-top: 10px; color: var(--text-muted); }
+.dpc-ptoggle { display: inline-flex; align-items: center; gap: 4px; margin-top: 10px; height: auto; padding: 4px 6px; background: transparent; box-shadow: none; border: 0; color: var(--text-muted); cursor: pointer; }
+.dpc-ptoggle:hover { color: var(--text-normal); }
+.dpc-ptasks { list-style: none; margin: 4px 0 4px; padding: 0; border-top: 1px solid var(--background-modifier-border); }
+.dpc-ptasks li { display: grid; grid-template-columns: 96px minmax(0, 1fr) 56px 64px 70px; align-items: center; gap: 10px; padding: 6px 2px; border-bottom: 1px solid var(--background-modifier-border); }
+.dpc-ptasks li.is-done .dpc-task-link { color: var(--text-muted); text-decoration: line-through; }
+.dpc-status { justify-self: start; font-size: 0.82em; font-weight: 600; padding: 1px 8px; border-radius: 10px; color: var(--dpc-sc); background: color-mix(in srgb, var(--dpc-sc) 14%, transparent); white-space: nowrap; }
+.dpc-ptask-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dpc-ptask-prog { height: 4px; border-radius: 2px; background: var(--background-modifier-border); overflow: hidden; }
+.dpc-ptask-prog > span { display: block; height: 100%; background: var(--interactive-accent, var(--text-accent)); }
+.dpc-ptasks-empty { margin: 6px 0; }
+@media (max-width: 640px) { .dpc-pgrid { grid-template-columns: repeat(2, minmax(0, 1fr)); row-gap: 12px; } .dpc-pstat:nth-child(3) { border-left: 0; } .dpc-ptasks li { grid-template-columns: 84px minmax(0, 1fr) 50px; } .dpc-ptasks li > :nth-child(4), .dpc-ptasks li > :nth-child(5) { display: none; } }
+/* modals */
+.dpc-modal-input { width: 100%; margin: 10px 0 6px; font-size: 1.05em; }
+.dpc-modal-hint { font-size: 0.88em; }
+.dpc-qa-preview { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
+.dpc-qa-chip { font-size: 0.88em; padding: 2px 8px; border-radius: 10px; background: var(--background-secondary); }
+.dpc-qa-chip.is-default { color: var(--text-faint); }
+.dpc-pcard.is-empty { padding: 10px 16px; }
+.dpc-pcard.is-empty .dpc-phead { margin-bottom: 0; }
+.dpc-pcard.is-empty .dpc-picon { width: 32px; height: 32px; font-size: 16px; }
