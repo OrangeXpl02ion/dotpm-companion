@@ -2,6 +2,7 @@
 // Pure calculations. No Obsidian imports, so this file is unit-tested in Node.
 
 const NO_TYPE = "__none";
+const NO_PROJECT = "__noproject";
 // dotpm's own default sort, and the companion's replacement (due date, then priority; dotpm ranks priority by list order).
 const DUE_SORT = [{ key: "due", dir: "asc" }, { key: "priority", dir: "asc" }];
 function isDefaultSort(sort) { return !Array.isArray(sort) || !sort.length || (sort.length === 1 && sort[0] && sort[0].key === "status" && sort[0].dir !== "desc"); }
@@ -245,7 +246,7 @@ function compute(tasks, cfg, settings, today) {
   const open = tasks.filter(t => !isComplete(cfg, t.status));
   const weeks = weeksInRange(settings.rangeStart, settings.rangeEnd).map(w => ({
     ...w, raw: 0, adj: 0, available: w.week in cap ? cap[w.week] : fallback, fromFile: w.week in cap,
-    byType: {}, rawByType: {}, tasks: [],
+    byType: {}, rawByType: {}, byProject: {}, rawByProject: {}, tasks: [],
   }));
   const byWeek = Object.fromEntries(weeks.map(w => [w.week, w]));
   const unscheduled = [], beyond = [];
@@ -254,7 +255,7 @@ function compute(tasks, cfg, settings, today) {
     if (raw <= 0) continue;
     const s = spread(t, raw, today);
     if (!s) { unscheduled.push(t); continue; }
-    const k = typeKey(t);
+    const k = typeKey(t), pk = t.project || NO_PROJECT;
     const per = {};
     for (const [d, h] of s) {
       const w = byWeek[isoWeek(d)];
@@ -263,6 +264,8 @@ function compute(tasks, cfg, settings, today) {
       w.raw += h; w.adj += a;
       w.byType[k] = (w.byType[k] || 0) + a;
       w.rawByType[k] = (w.rawByType[k] || 0) + h;
+      w.byProject[pk] = (w.byProject[pk] || 0) + a;
+      w.rawByProject[pk] = (w.rawByProject[pk] || 0) + h;
       per[w.week] = (per[w.week] || { raw: 0, adj: 0 });
       per[w.week].raw += h; per[w.week].adj += a;
     }
@@ -363,6 +366,27 @@ function projectTree(projects) {
   const sort = list => { list.sort((a, b) => a.title.localeCompare(b.title)); for (const x of list) sort(x.children); };
   sort(roots);
   return roots;
+}
+// Categories for the load chart: one group per top-level project (Studio, Portfolio, a class…), listing the
+// group's own tasks first and then every sub-project depth-first. Task projects with no project note become
+// their own group; tasks with no project go last.
+// → [{ key, title, members: [{ key (project title), title, depth, own }] }]
+function categoryGroups(projects, taskProjects) {
+  const groups = [], seen = new Set();
+  const walk = (node, depth, out) => {
+    out.push({ key: node.title, title: node.title, depth, own: depth === 0 && node.children.length > 0 });
+    seen.add(node.title);
+    for (const c of node.children) walk(c, depth + 1, out);
+  };
+  for (const root of projectTree(projects || [])) {
+    const members = [];
+    walk(root, 0, members);
+    groups.push({ key: root.title, title: root.title, members });
+  }
+  const extra = [...new Set((taskProjects || []).filter(p => p && p !== NO_PROJECT && !seen.has(p)))].sort();
+  for (const p of extra) groups.push({ key: p, title: p, members: [{ key: p, title: p, depth: 0, own: false }] });
+  if ((taskProjects || []).some(p => !p || p === NO_PROJECT)) groups.push({ key: NO_PROJECT, title: "No project", members: [{ key: NO_PROJECT, title: "No project", depth: 0, own: false }] });
+  return groups;
 }
 function taskShare(t, cfg) { return isComplete(cfg, t.status) ? 1 : Math.max(0, Math.min(1, (t.progress || 0) / 100)); }
 // How far along a task should be by today: share of its start→due window that has passed.
@@ -613,7 +637,7 @@ function setFrontmatterLines(text, fields) {
 
 module.exports = {
   bodyOf, setFrontmatterLines, frontmatterOf,
-  NO_TYPE, DEFAULT_MULTIPLIER, DUE_SORT, isDefaultSort,
+  NO_TYPE, NO_PROJECT, DEFAULT_MULTIPLIER, categoryGroups, DUE_SORT, isDefaultSort,
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,
   readDotpmConfig, isComplete, doneStatusId, priorityRank, label,
   linkText, parseChecklist, checklistProgress, parseTask,

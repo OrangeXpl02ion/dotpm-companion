@@ -248,3 +248,22 @@ test("work type is found by value when this device's field id differs", () => {
   const k = M.parseTask("x.md", { "pm-task": true, title: "x", customFields: { "9as32nw7mvg3hsfb": "CAD" } }, "", other);
   assert.equal(k.workType, "CAD");
 });
+
+test("per-project load adds up to the week and groups by top-level project", () => {
+  const R = M.compute(tasks, cfg, settings, "2026-10-20");
+  for (const w of R.weeks) {
+    const sum = Object.values(w.byProject).reduce((a, b) => a + b, 0);
+    assert.ok(Math.abs(sum - w.adj) < 1e-6);
+    const raw = Object.values(w.rawByProject).reduce((a, b) => a + b, 0);
+    assert.ok(Math.abs(raw - w.raw) < 1e-6);
+  }
+  const P = (path, title, parent) => ({ path, title, parent: parent ? `[[${parent}]]` : null });
+  const g = M.categoryGroups([
+    P("P/Studio.md", "Studio"), P("P/Garden.md", "Gardening Studio", "P/Studio"),
+    P("P/Portfolio.md", "Portfolio"), P("P/Kettle.md", "Kettle", "P/Portfolio"), P("P/About.md", "About Page", "P/Portfolio"),
+    P("P/Furniture.md", "Furniture"),
+  ], ["Kettle", "Gardening Studio", "Furniture", "Loose", M.NO_PROJECT]);
+  assert.deepEqual(g.map(x => x.title), ["Furniture", "Portfolio", "Studio", "Loose", "No project"]);
+  assert.deepEqual(g[1].members.map(m => m.title), ["Portfolio", "About Page", "Kettle"]);
+  assert.ok(g[1].members[0].own && !g[0].members[0].own);
+});

@@ -13,6 +13,7 @@ An Obsidian plugin that sits beside [dotpm](https://dotpm.pm) and adds cross-pro
 - **Projects**: one card per project in the style of dotpm's project overview — progress (weighted by estimate) against where the plan says it should be by today, tasks done, overdue, time logged/estimate, milestones — with a Tasks dropdown. Sub-projects nest under their parent and roll up into it; behind and at-risk projects are listed first.
 - **Capacity**: committed hours per ISO week against `Capacity.md`, raw and × multipliers; weeks at 85 % or more flagged; at-risk tasks listed. Remaining hours are spread evenly from max(start, today) to due; overdue work lands today.
 - **Work types**: stacked hours per week by `work-type`, with the available-hours line and a table.
+- **Categories**: the same chart split by project, every sub-project its own segment, shaded within its top-level category's color.
 - **Multipliers**: one per work-type (default 2.0×), change history and trend chart, with the measured factor (cumulative logged ÷ estimate of done tasks, by completion date) as a dashed line beside it.
 - **Progress from checklist**: progress = ticked share of the `## Done when` checklist.
 - **dotpm default sort**: any dotpm view still on dotpm's default (status) is switched once to due date, then priority. A sort you pick in dotpm afterwards is kept.

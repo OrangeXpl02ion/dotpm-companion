@@ -225,3 +225,7 @@
 .dpc-pcard.is-empty { padding: 10px 16px; }
 .dpc-pcard.is-empty .dpc-phead { margin-bottom: 0; }
 .dpc-pcard.is-empty .dpc-picon { width: 32px; height: 32px; font-size: 16px; }
+.dpc-legend-groups { flex-direction: column; gap: 4px; }
+.dpc-legend-group { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; }
+.dpc-legend-cat { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; color: var(--text-normal); min-width: 9em; }
+.dpc-legend-cat .dpc-swatch { margin-right: 0; }

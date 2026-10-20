@@ -7,6 +7,8 @@ cases=[
  ("queue_light",dict(tab="queue")),
  ("types_light",dict(tab="types")),
  ("types_dark",dict(tab="types",dark=True)),
+ ("categories_light",dict(tab="categories")),
+ ("categories_dark",dict(tab="categories",dark=True)),
  ("mult_light",dict(tab="multipliers",today="2026-11-20",changes=[["2026-10-27","CAD",1.8],["2026-11-03","CAD",1.6],["2026-11-03","Writing",1.4],["2026-11-10","Render",1.5],["2026-11-17","Writing",1.2]])),
  ("mult_dark",dict(tab="multipliers",dark=True)),
 ]
@@ -21,7 +23,7 @@ async def main():
       await pg.wait_for_timeout(100)
       await pg.screenshot(path=f"{OUT}/{name}.png",full_page=True)
     # hover test on trend chart
-    await pg.evaluate("o=>setup(o)",cases[5][1])
+    await pg.evaluate("o=>setup(o)",dict(cases)["mult_light"])
     box=await pg.locator(".dpc-hit").bounding_box()
     await pg.mouse.move(box["x"]+box["width"]*0.55,box["y"]+box["height"]/2)
     await pg.wait_for_timeout(100)
