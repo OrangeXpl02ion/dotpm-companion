@@ -52,7 +52,7 @@ cut by the workflow.
 | Create a project | `await pm.store.createProject(title, folder, { icon, color, description, parentPath })` → project |
 | Redraw dotpm | `pm.refreshViews()` |
 | Open dotpm's task editor | `pm.router.openTask({ filePath })` |
-| Default sort per view | `pm.settings.projectFilters[scopeKey].sort` (scope keys: `vault`, `project:<path>`, `picked:<sorted paths joined by |>`), then `pm.saveSettings()`. Sortable keys: `title,status,priority,due,assignees,progress`; priority sorts by list index. |
+| Default sort per view | `pm.settings.projectFilters[scopeKey].sort` (scope keys: `vault`, `project:<path>`, `picked:<sorted paths joined by \|>`), then `pm.saveSettings()`. Sortable keys: `title,status,priority,due,assignees,progress`; priority sorts by list index. |
 | Host dotpm's view | `app.viewRegistry.viewByType["pm-project"](leaf)` with a stand-in leaf (`Object.create(realLeaf)`) whose `setViewState` routes `pm-project` state back into the hosted view and opens other types in a new tab. State: `{ scope: { kind: "vault" } }` or `{ scope: { kind: "project", path } }`. |
 
 If any of these is missing or throws, `updateTask` falls back to a one-line frontmatter edit
