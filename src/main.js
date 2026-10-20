@@ -499,8 +499,12 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     return id;
   }
   isLogDevice() { return !!this.settings.logDeviceId && this.settings.logDeviceId === this.deviceId(); }
+  // Only one device writes the logs. A device claims it automatically only if nobody has yet: no device id in
+  // the (synced) settings and no log file already in the vault, which would mean another device is logging.
   claimLogDevice(force) {
-    if (force || (!this.settings.logDeviceId && Platform && Platform.isDesktopApp)) { this.settings.logDeviceId = this.deviceId(); this.saveSettings(); }
+    const taken = this.settings.logDeviceId || this.app.vault.getAbstractFileByPath(normalizePath(this.settings.scheduleLogFile))
+      || this.app.vault.getAbstractFileByPath(normalizePath(this.settings.spilloverFile));
+    if (force || (!taken && Platform && Platform.isDesktopApp)) { this.settings.logDeviceId = this.deviceId(); this.saveSettings(); }
   }
   noteReason(path, why) { this.reasons.set(path, { why, at: Date.now() }); }
   trackDates(t) {
@@ -529,10 +533,16 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   async writeSpillover(force) {
     if (!force && !this.isLogDevice()) return;
     const today = M.localToday(), week = M.isoWeek(today);
-    if (!force && this.settings.lastSpilloverWeek === week) return;
-    const prevWeek = M.isoWeek(M.addDays(M.mondayOf(today), -7));
-    await this.prependTo(this.settings.spilloverFile, M.SPILLOVER_HEADER, M.spilloverRows(M.spillover(this.taskList(), this.cfg, M.mondayOf(today)), prevWeek));
+    if (!force && (this.settings.lastSpilloverWeek === week || this.spilloverBusy)) return;
+    // mark the week first, so a second call (plugin reload, another trigger) can't write it again
+    this.spilloverBusy = true;
     this.settings.lastSpilloverWeek = week; await this.saveSettings();
+    const prevWeek = M.isoWeek(M.addDays(M.mondayOf(today), -7));
+    const rows = M.spilloverRows(M.spillover(this.taskList(), this.cfg, M.mondayOf(today)), prevWeek);
+    const f = this.app.vault.getAbstractFileByPath(normalizePath(this.settings.spilloverFile));
+    const existing = f instanceof TFile ? await this.app.vault.read(f) : "";
+    if (force || !existing.includes(`| ${prevWeek} |`)) await this.prependTo(this.settings.spilloverFile, M.SPILLOVER_HEADER, rows);
+    this.spilloverBusy = false;
     if (force) new Notice(`Wrote ${prevWeek} to ${this.settings.spilloverFile}.`);
   }
 

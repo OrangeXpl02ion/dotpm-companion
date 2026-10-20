@@ -226,3 +226,28 @@ test("schedule log groups a cause with its knock-ons on the logging device", asy
   assert.match(rows[0], /Toaster CAD .* due 11-13 → 11-17 .* moved the tasks below/);
   assert.match(rows[1], /Toaster renders .* knock-on from Toaster CAD/);
 });
+
+test("spillover is written once per week even if triggered twice", async () => {
+  const { p } = make(true);
+  p.isLogDevice = () => true;
+  let md = "";
+  p.app.vault.read = async () => md;
+  p.app.vault.getAbstractFileByPath = path => (path === "Spillover.md" && md ? new (require("obsidian").TFile)(path) : null);
+  p.settings.spilloverFile = "Spillover.md"; p.settings.lastSpilloverWeek = "";
+  p.prependTo = async (name, header, rows) => { md = M.prependRows(md, header, rows); };
+  await Promise.all([p.writeSpillover(false), p.writeSpillover(false)]);
+  p.settings.lastSpilloverWeek = ""; // e.g. settings from another device arrive late
+  await p.writeSpillover(false);
+  assert.equal((md.match(/nothing spilled over/g) || []).length, 1);
+});
+
+test("a device doesn't claim logging when another device's log is already in the vault", () => {
+  const { p } = make(true);
+  p.settings.logDeviceId = ""; p.settings.scheduleLogFile = "Schedule log.md"; p.settings.spilloverFile = "Spillover.md";
+  p.deviceId = () => "mac";
+  p.app.vault.getAbstractFileByPath = path => (path === "Schedule log.md" ? {} : null);
+  p.claimLogDevice(false);
+  assert.equal(p.settings.logDeviceId, "");
+  p.claimLogDevice(true);
+  assert.equal(p.settings.logDeviceId, "mac");
+});
