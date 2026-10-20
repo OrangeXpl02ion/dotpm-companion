@@ -19,6 +19,7 @@ projects. dotpm owns the data (Markdown notes with frontmatter); the companion r
 | `build.js` | Dependency-free bundler: wraps `src/*.js` into one CommonJS `main.js`. **`main.js` is generated — edit `src/`.** |
 | `test/*.test.js` | `node --test`. `fixture/vault.json` is sample data shaped like a real vault. `embed.test.js` fakes dotpm's view; `bridge.test.js` fakes dotpm's store. |
 | `test/render.js` + `test/shots.py` | Build `test/build/render.html` and screenshot tabs with Playwright (Chromium at `/opt/pw-browsers/...` in Claude's sandbox). |
+| `tools/capacity_from_calendar.py` | Python script (standard library only) that rebuilds `Capacity.md` from a JSON list of calendar events and a rules file (`tools/capacity-rules.example.json`). Used by the scheduled capacity task. |
 | `.github/workflows/release.yml` | On push to `main`: build, test, and if `manifest.json`'s version has no release yet, publish one with `main.js`, `manifest.json`, `styles.css`. |
 
 ## Commands

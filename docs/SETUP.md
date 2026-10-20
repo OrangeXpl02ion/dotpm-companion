@@ -98,10 +98,13 @@ Rules: the companion reads the first column whose header contains "week" (`2026-
 week) and the first whose header contains "available" or "hours". Other columns are ignored. Weeks missing
 from the table use *Default hours per week*. *Create capacity file* writes a blank table for the planning range.
 
-**Filling it from Google Calendar** (how the current file was made): start from usable hours
-(weekdays 9:00–23:00, weekends 10:00–22:00, minus 2 h/day for meals = 80 h/week), subtract timed events you
-attend (classes, work shifts, meetings you accepted), treat holidays as days off, and ignore all-day reminders
-and unaccepted invites. Keep the assumptions in the note above the table.
+**Filling it from Google Calendar:** `tools/capacity_from_calendar.py <rules.json> <events.json> <Capacity.md>`
+rebuilds the file from calendar events. Rules (`tools/capacity-rules.example.json`; the vault copy lives at
+`Claude/capacity-rules.json`): a usable window per day (weekdays 9:00–23:00, weekends 10:00–22:00), 2 h for meals,
+**every timed event you've accepted or created is subtracted** (classes, meetings, personal and professional events,
+clipped to the window, overlaps counted once), **classes listed in `workTimeClasses` stay as work time**, **1 h of
+travel** comes off each day with an in-person event, holidays are days off, and all-day items, free events and
+unaccepted invites are ignored. A scheduled Claude task re-runs it three times a day.
 
 ---
 
