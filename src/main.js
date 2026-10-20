@@ -1,5 +1,5 @@
 "use strict";
-const { Plugin, ItemView, PluginSettingTab, Setting, Notice, TFile, TFolder, Modal, FuzzySuggestModal, Platform, normalizePath, debounce } = require("obsidian");
+const { Plugin, ItemView, PluginSettingTab, Setting, Notice, TFile, TFolder, Modal, FuzzySuggestModal, Platform, normalizePath, debounce, parseYaml } = require("obsidian");
 const M = require("./model");
 const V = require("./views");
 
@@ -175,6 +175,10 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
       this.claimLogDevice();
       await this.writeSpillover(false);
       this.registerEvent(this.app.metadataCache.on("changed", (file, data, cache) => this.onChanged(file, data, cache)));
+      // When Obsidian finishes (re)building its metadata cache — e.g. right after a sync — read everything again.
+      const reindex = debounce(() => this.rebuildIndex(), 1500, true);
+      this.registerEvent(this.app.metadataCache.on("resolved", () => { if (!this.indexing) reindex(); }));
+      this.registerEvent(this.app.vault.on("create", f => { if (f instanceof TFile && this.inProjects(f.path)) this.indexFile(f).then(() => this.scheduleRecompute()); }));
       this.registerEvent(this.app.vault.on("delete", f => { if (this.tasks.delete(f.path)) this.scheduleRecompute(); if (f.path === this.settings.capacityFile) this.loadCapacity().then(() => this.scheduleRecompute()); }));
       this.registerEvent(this.app.vault.on("rename", (f, old) => { if (this.tasks.has(old)) { this.tasks.delete(old); this.indexFile(f).then(() => this.scheduleRecompute()); } }));
       this.registerEvent(this.app.vault.on("modify", f => {
@@ -213,16 +217,22 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
 
   async indexFile(file, content) {
     if (!(file instanceof TFile) || !this.inProjects(file.path)) return null;
-    const fm = (this.app.metadataCache.getFileCache(file) || {}).frontmatter;
+    let fm = (this.app.metadataCache.getFileCache(file) || {}).frontmatter;
+    let text = content;
+    // On a device that just synced, Obsidian's metadata cache may not be built yet: read the file itself.
+    if (!fm) {
+      text = text != null ? text : await this.app.vault.cachedRead(file);
+      fm = M.frontmatterOf(text, typeof parseYaml === "function" ? parseYaml : null);
+    }
     if (fm && fm["pm-project"] === true && typeof fm.title === "string") {
       this.projectColors[fm.title] = typeof fm.color === "string" ? fm.color : null;
-      const text = content != null ? content : await this.app.vault.cachedRead(file);
+      text = text != null ? text : await this.app.vault.cachedRead(file);
       const body = M.bodyOf(text).replace(/^\s*#[ \t][^\n]*\n?/, "").replace(/(?:^|\n)## Tasks[\s\S]*$/, "").trim();
       this.projectNotes[file.path] = { path: file.path, title: fm.title, parent: typeof fm.parent === "string" && fm.parent ? fm.parent : null,
         icon: typeof fm.icon === "string" ? fm.icon : "📋", color: typeof fm.color === "string" ? fm.color : null, description: body, archived: fm.archived === true };
     }
     if (!fm || fm["pm-task"] !== true) { this.tasks.delete(file.path); return null; }
-    const text = content != null ? content : await this.app.vault.cachedRead(file);
+    text = text != null ? text : await this.app.vault.cachedRead(file);
     const t = M.parseTask(file.path, fm, M.bodyOf(text), this.cfg);
     if (t) this.tasks.set(file.path, t); else this.tasks.delete(file.path);
     if (t) this.trackDates(t);

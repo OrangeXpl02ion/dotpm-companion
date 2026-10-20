@@ -4,7 +4,7 @@ const assert = require("node:assert/strict");
 const Module = require("module");
 class TFile { constructor(path) { this.path = path; } }
 global.document = { createDocumentFragment: () => ({ append() {} }), createElement: () => ({ addEventListener() {} }) };
-const stub = { Plugin: class { constructor(app) { this.app = app; } }, ItemView: class {}, PluginSettingTab: class {}, Setting: class {}, Modal: class {}, FuzzySuggestModal: class {}, TFolder: class {}, Platform: { isDesktopApp: true },
+const stub = { Plugin: class { constructor(app) { this.app = app; } }, ItemView: class {}, PluginSettingTab: class {}, Setting: class {}, Modal: class {}, FuzzySuggestModal: class {}, TFolder: class {}, Platform: { isDesktopApp: true }, parseYaml: s => global.__yaml(s),
   Notice: class { constructor(m) { stub.notices.push(m); } }, TFile, normalizePath: x => x, debounce: f => f, notices: [] };
 const orig = Module._load;
 Module._load = function (r, ...a) { return r === "obsidian" ? stub : orig.call(this, r, ...a); };
@@ -265,4 +265,20 @@ test("the logging switch: on in one place takes over; off releases it", async ()
   assert.equal(p.settings.logDeviceId, ""); assert.equal(p.isLogDevice(), false);
   p.settings.logDeviceId = "mac"; // a stale synced claim
   assert.equal(p.isLogDevice(), false, "a local off always wins");
+});
+
+test("tasks are found even when Obsidian's metadata cache is still empty (fresh sync)", async () => {
+  const { p } = make(true);
+  const text = "---\npm-task: true\nid: \"t9\"\ntitle: \"Fresh\"\nprojectId: \"[[K|K]]\"\nstatus: todo\ndue: 2026-11-02\ntimeEstimate: 3\n---\n\nProject: [[K|K]]\n";
+  const f = new (require("obsidian").TFile)("Project/K/_tasks/fresh.md");
+  p.cfg = M.readDotpmConfig({});
+  p.app.metadataCache = { getFileCache: () => null };
+  p.app.vault.cachedRead = async () => text;
+  p.tasks = new Map();
+  p.trackDates = () => {};
+  const yaml = s => Object.fromEntries(s.split("\n").map(l => l.split(/: (.*)/)).map(([k, v]) => [k, v === "true" ? true : /^\d+$/.test(v) ? Number(v) : String(v).replace(/^"|"$/g, "")]));
+  global.__yaml = yaml;
+  const t = await p.indexFile(f);
+  assert.ok(t, "parsed from the file");
+  assert.equal(t.title, "Fresh"); assert.equal(t.due, "2026-11-02"); assert.equal(t.estimate, 3);
 });

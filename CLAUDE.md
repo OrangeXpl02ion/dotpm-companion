@@ -17,7 +17,7 @@ projects. dotpm owns the data (Markdown notes with frontmatter); the companion r
 | `src/main.js` | Obsidian glue: plugin class, `CompanionView` (an `ItemView`), dotpm bridge, indexing, commands, modals, settings tab, logs. |
 | `styles.css` | All styles, scoped under `.dpc-root` / `.dpc-*`; colors via Obsidian CSS variables and `--dpc-s1…s9`. |
 | `build.js` | Dependency-free bundler: wraps `src/*.js` into one CommonJS `main.js`. **`main.js` is generated — edit `src/`.** |
-| `test/*.test.js` | `node --test`. `fixture/vault.json` is a snapshot of a real vault. `embed.test.js` fakes dotpm's view; `bridge.test.js` fakes dotpm's store. |
+| `test/*.test.js` | `node --test`. `fixture/vault.json` is sample data shaped like a real vault. `embed.test.js` fakes dotpm's view; `bridge.test.js` fakes dotpm's store. |
 | `test/render.js` + `test/shots.py` | Build `test/build/render.html` and screenshot tabs with Playwright (Chromium at `/opt/pw-browsers/...` in Claude's sandbox). |
 | `.github/workflows/release.yml` | On push to `main`: build, test, and if `manifest.json`'s version has no release yet, publish one with `main.js`, `manifest.json`, `styles.css`. |
 
@@ -74,5 +74,6 @@ task in memory otherwise leaves dotpm showing stale values until it reloads.
 
 - dotpm rewrites task files on save (slug file names, unquoted YAML). Match by `id`/`title`, not file name.
 - `metadataCache.on("changed")` fires for the companion's own writes; writers must be idempotent.
+- On a freshly synced device the metadata cache can be empty at startup: `indexFile` falls back to parsing the frontmatter from the file text, and the index is rebuilt on `metadataCache.on("resolved")`.
 - `test/render.js` builds HTML inside a template literal — no backticks in code you inject there.
 - Windows: folders created by another process can need `takeown`/`icacls` before deletion.

@@ -582,6 +582,13 @@ Used by **dotpm Companion → New project from template**. Each row becomes a ta
 | Case study page | Concepting | 8 | 21 | 4 | Renders, Decision notes, Prototype | Page published; 30-second test passes |
 `;
 
+// Frontmatter straight from the file text, for when Obsidian's metadata cache isn't ready yet.
+function frontmatterOf(text, parseYaml) {
+  const mm = typeof text === "string" && text.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!mm || typeof parseYaml !== "function") return null;
+  try { const v = parseYaml(mm[1]); return v && typeof v === "object" ? v : null; } catch (e) { return null; }
+}
+
 // ---------- file text ----------
 function bodyOf(text) {
   const m = text.match(/^---\r?\n[\s\S]*?\r?\n---\r?\n?/);
@@ -602,7 +609,7 @@ function setFrontmatterLines(text, fields) {
 }
 
 module.exports = {
-  bodyOf, setFrontmatterLines,
+  bodyOf, setFrontmatterLines, frontmatterOf,
   NO_TYPE, DEFAULT_MULTIPLIER, DUE_SORT, isDefaultSort,
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,
   readDotpmConfig, isComplete, doneStatusId, priorityRank, label,
