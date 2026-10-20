@@ -103,7 +103,7 @@ rebuilds the file from calendar events. Rules (`tools/capacity-rules.example.jso
 `Claude/capacity-rules.json`): a usable window per day (weekdays 9:00–23:00, weekends 10:00–22:00), 2 h for meals,
 **every timed event you've accepted or created is subtracted** (classes, meetings, personal and professional events,
 clipped to the window, overlaps counted once), **classes listed in `workTimeClasses` stay as work time**, **1 h of
-travel** comes off each day with an in-person event, holidays are days off, and all-day items, free events and
+travel** comes off each day with an in-person event, regular **chores** (e.g. 20 min laundry on Sundays) come off their days, holidays are days off, and all-day items, free events and
 unaccepted invites are ignored. A scheduled Claude task re-runs it three times a day.
 
 ---

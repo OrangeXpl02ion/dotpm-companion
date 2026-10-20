@@ -5,6 +5,7 @@
   "window": { "weekday": ["09:00", "23:00"], "weekend": ["10:00", "22:00"] },
   "mealsHours": 2,
   "travelHours": 1,
+  "chores": [{ "label": "laundry folding", "hours": 0.3333, "days": ["Sun"] }],
   "workTimeClasses": ["Senior Design Studio", "Joinery & Furniture"],
   "countResponses": ["accepted", "owner"],
   "ignoreTitles": [],
