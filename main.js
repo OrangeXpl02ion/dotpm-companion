@@ -195,24 +195,58 @@ function measuredSeries(tasks, cfg) {
 }
 
 // ---------- capacity ----------
+function cellsOf(l) { return l.trim().replace(/^\||\|$/g, "").split(/(?<!\\)\|/).map(c => c.trim()); }
+function isRule(c) { return c.every(x => /^:?-+:?$/.test(x) || x === ""); }
+// Markdown tables in a file: [{ start, head (lower-case cells), rows: [{ line, cells }] }], line = index in lines.
+function tablesOf(lines) {
+  const out = []; let cur = null;
+  lines.forEach((l, i) => {
+    if (!/^\s*\|/.test(l)) { cur = null; return; }
+    const c = cellsOf(l);
+    if (!cur) { cur = { start: i, head: c.map(x => x.toLowerCase()), rows: [] }; out.push(cur); return; }
+    if (isRule(c)) return;
+    cur.rows.push({ line: i, cells: c });
+  });
+  return out;
+}
+function weekTable(tables) {
+  for (const t of tables) {
+    const wi = t.head.findIndex(c => /^week\b/.test(c) || /\bweek$/.test(c));
+    const hi = t.head.findIndex(c => c.includes("available") || c.includes("hours"));
+    if (wi !== -1 && hi !== -1) return { ...t, wi, hi };
+  }
+  return null;
+}
+// Daily table written by the capacity script: | Day | Available hours | Usable | Notes |
+function dayTable(tables) {
+  for (const t of tables) {
+    const di = t.head.findIndex(c => c === "day" || c === "date");
+    const hi = t.head.findIndex(c => c.includes("available"));
+    if (di !== -1 && hi !== -1 && !t.head.some(c => /^week\b/.test(c))) return { ...t, di, hi };
+  }
+  return null;
+}
+// Weekly hours, read from the first table that has a Week and an Available hours column.
 function parseCapacity(md) {
   const map = {};
   if (typeof md !== "string") return map;
-  const rows = md.split(/\r?\n/).filter(l => /^\s*\|/.test(l));
-  if (rows.length < 2) return map;
-  const cells = l => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
-  const head = cells(rows[0]).map(c => c.toLowerCase());
-  const wi = head.findIndex(c => c.includes("week"));
-  const hi = head.findIndex(c => c.includes("available") || c.includes("hours"));
-  if (wi === -1 || hi === -1) return map;
-  for (const r of rows.slice(1)) {
-    const c = cells(r);
-    if (c.every(x => /^:?-+:?$/.test(x) || x === "")) continue;
-    const wk = c[wi], hrs = parseFloat(c[hi]);
+  const t = weekTable(tablesOf(md.split(/\r?\n/)));
+  if (!t) return map;
+  for (const r of t.rows) {
+    const wk = r.cells[t.wi], hrs = parseFloat(r.cells[t.hi]);
     if (!isFinite(hrs)) continue;
     if (/^\d{4}-W\d{2}$/.test(wk)) map[wk] = hrs;
     else if (isDate(wk)) map[isoWeek(wk)] = hrs;
   }
+  return map;
+}
+// Daily hours from the Days table, if the file has one: { "2026-10-22": 9.5 }.
+function parseCapacityDays(md) {
+  const map = {};
+  if (typeof md !== "string") return map;
+  const t = dayTable(tablesOf(md.split(/\r?\n/)));
+  if (!t) return map;
+  for (const r of t.rows) { const d = r.cells[t.di], h = parseFloat(r.cells[t.hi]); if (isDate(d) && isFinite(h)) map[d] = h; }
   return map;
 }
 function capacityTemplate(rangeStart, rangeEnd, hours) {
@@ -495,6 +529,135 @@ function parseLogInput(text) {
   return { hours: Math.round(hours * 100) / 100, note: (m[5] || "").trim() };
 }
 
+// ---------- quick capacity ----------
+// One line that changes a day's available hours:
+//   "-1.5 sleep"  "-3 thu dentist"  "+2 sat crunch"  "-45m nap"  "off fri sick"  "undo"
+// Day words: today (default), tomorrow, yesterday, mon…sun (next one, today included), nov 9, 11/9, 2026-11-09.
+function parseCapacityInput(text, today) {
+  let rest = " " + String(text || "").trim() + " ";
+  if (/^\s*undo\s*$/i.test(rest)) return { kind: "undo" };
+  const out = { kind: null, hours: null, date: null, reason: "" };
+  const take = (re, fn) => { rest = rest.replace(re, (...m) => { const r = fn(...m); return r === false ? m[0] : " "; }); };
+  take(/\s(off|day\s+off)(?=\s)/i, () => { out.kind = "off"; });
+  if (!out.kind) {
+    // -1.5, -1.5h, +2 hours, -45m, -1h30m
+    take(/\s([+\-−])\s?(\d+(?:\.\d+)?)\s?(h|hrs?|hours?|m|mins?|minutes?)?(?:\s?(\d+)\s?(?:m|mins?|minutes?))?(?=\s)/i, (m, sign, n, u, n2) => {
+      if (out.hours != null) return false;
+      const isMin = !!u && /^m/i.test(u);
+      if (isMin && n2) return false;
+      if (n2 && !u) return false;
+      const h = isMin ? Number(n) / 60 : parseFloat(n) + (n2 ? Number(n2) / 60 : 0);
+      out.hours = h * (sign === "+" ? 1 : -1); out.kind = "adjust";
+    });
+  }
+  if (!out.kind) return null;
+  const setDate = d => { if (!d || out.date) return false; out.date = d; };
+  take(/\s(today|tod)(?=\s)/i, () => setDate(today));
+  take(/\s(tomorrow|tmr|tom)(?=\s)/i, () => setDate(addDays(today, 1)));
+  take(/\s(yesterday|yday)(?=\s)/i, () => setDate(addDays(today, -1)));
+  take(/\s([a-z]{3,9})\.?\s+(\d{1,2})(?=\s)/i, (m, mon, d) => { const i = MONTHS3.indexOf(mon.slice(0, 3).toLowerCase()); if (i === -1) return false; return setDate(dateFromMonthDay(today, i + 1, Number(d))); });
+  take(/\s(\d{1,2})\/(\d{1,2})(?=\s)/, (m, mo, d) => setDate(dateFromMonthDay(today, Number(mo), Number(d))));
+  take(/\s(\d{4}-\d{2}-\d{2})(?=\s)/, (m, d) => isDate(d) ? setDate(d) : false);
+  take(/\s(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(day)?(?=\s)/i, (m, d) => setDate(nextWeekday(today, WEEKDAYS.indexOf(d.slice(0, 3).toLowerCase()))));
+  out.date = out.date || today;
+  out.reason = rest.replace(/\s+/g, " ").trim();
+  if (out.kind === "adjust") { out.hours = Math.round(out.hours * 100) / 100; if (!out.hours || Math.abs(out.hours) > 24) return null; }
+  return out;
+}
+// Usable hours of a day under the rules (window minus meals); the most a day can hold.
+function hm(s) { const [h, m] = String(s).split(":").map(Number); return h + (m || 0) / 60; }
+function dayUsable(rules, date) {
+  const w = rules && rules.window && rules.window[weekdayOf(date) % 6 === 0 ? "weekend" : "weekday"];
+  if (!w) return 24;
+  return Math.max(0, hm(w[1]) - hm(w[0]) - (rules.mealsHours != null ? rules.mealsHours : 2));
+}
+const DOW3 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function dayLabel(d) { return `${DOW3[weekdayOf(d)]} ${MON3[Number(d.slice(5, 7)) - 1]} ${Number(d.slice(8))}`; }
+function fmtH(h) { const r = Math.round(h * 100) / 100; return (r < 0 ? "−" : "") + Math.abs(r); }
+function signed(h) { return (h > 0 ? "+" : h < 0 ? "−" : "") + Math.abs(Math.round(h * 100) / 100); }
+// The capacity note a change leaves in Capacity.md and the script repeats on rebuild: "Thu Oct 22: −3 h dentist".
+function adjustmentNote(a) { return a.kind === "off" ? `${dayLabel(a.date)}: ${a.reason || "day off"}` : `${dayLabel(a.date)}: ${signed(a.hours)} h${a.reason ? " " + a.reason : ""}`; }
+// What a change does: dayBefore/dayAfter (hours that day), applied (the real change after clamping to 0…usable).
+// days: parseCapacityDays result; weekly: parseCapacity result; fallbackWeekly when the week is missing.
+function planAdjustment(a, ctx) {
+  const week = isoWeek(a.date);
+  const weekBefore = week in ctx.weekly ? ctx.weekly[week] : ctx.fallbackWeekly;
+  const usable = dayUsable(ctx.rules, a.date);
+  const fromDays = a.date in ctx.days;
+  const dayBefore = fromDays ? ctx.days[a.date] : Math.min(usable, weekBefore / 7);
+  const offAlready = ((ctx.rules && ctx.rules.holidays) || []).some(h => h.date === a.date);
+  let dayAfter = a.kind === "off" ? 0 : Math.max(0, Math.min(usable, dayBefore + a.hours));
+  if (offAlready) dayAfter = 0;
+  const applied = Math.round((dayAfter - dayBefore) * 100) / 100;
+  return { week, weekBefore, weekAfter: Math.round((weekBefore + applied) * 100) / 100, usable, dayBefore, dayAfter, applied, estimated: !fromDays, offAlready,
+    clamped: a.kind === "adjust" && Math.abs(applied - a.hours) > 0.001 };
+}
+// Rules file entries. Script reads "adjustments" ({date, hours, reason}) and "holidays" ({date, note}); the
+// extra "added" and "applied" fields let Undo find and reverse the change.
+function addToRules(rules, a, applied, added) {
+  const r = JSON.parse(JSON.stringify(rules || {}));
+  if (a.kind === "off") (r.holidays = r.holidays || []).push({ date: a.date, note: a.reason || "day off", added, applied, by: "quick-capacity" });
+  else (r.adjustments = r.adjustments || []).push({ date: a.date, hours: a.hours, reason: a.reason, added, applied });
+  return r;
+}
+// Remove the newest entry Quick capacity added. Returns { rules, removed: { kind, date, hours, reason, applied } } or null.
+function removeLastFromRules(rules) {
+  const r = JSON.parse(JSON.stringify(rules || {}));
+  let best = null;
+  (r.adjustments || []).forEach((x, i) => { if (x.added && (!best || x.added >= best.x.added)) best = { list: "adjustments", i, x }; });
+  (r.holidays || []).forEach((x, i) => { if (x.added && x.by === "quick-capacity" && (!best || x.added >= best.x.added)) best = { list: "holidays", i, x }; });
+  if (!best) return null;
+  r[best.list].splice(best.i, 1);
+  const x = best.x;
+  return { rules: r, removed: { kind: best.list === "holidays" ? "off" : "adjust", date: x.date, hours: x.hours, reason: best.list === "holidays" ? x.note : x.reason, applied: Number(x.applied) || 0 } };
+}
+function fmtCell(h) { return String(Math.round(h * 100) / 100); }
+function noteCell(cell, add, remove) {
+  let parts = String(cell || "").split(/\s*;\s*/).filter(Boolean);
+  if (remove) { const i = parts.indexOf(remove); if (i !== -1) parts.splice(i, 1); }
+  if (add) parts.push(add);
+  return parts.join("; ");
+}
+// Change Capacity.md in place: the week's Available hours (and Adjusted, Notes), and the day's row in the Days
+// table if there is one. delta = hours added (negative = lost). addNote / removeNote: note text for both rows.
+function applyCapacityDelta(md, date, delta, addNote, removeNote) {
+  const nl = md.includes("\r\n") ? "\r\n" : "\n";
+  const lines = md.split(/\r?\n/);
+  const tables = tablesOf(lines);
+  const put = (r, cells) => { lines[r.line] = "| " + cells.join(" | ") + " |"; };
+  const w = weekTable(tables);
+  let found = false;
+  if (w) {
+    const ai = w.head.findIndex(c => c.startsWith("adjust")), ni = w.head.findIndex(c => c.startsWith("note"));
+    const row = w.rows.find(r => r.cells[w.wi] === isoWeek(date) || (isDate(r.cells[w.wi]) && isoWeek(r.cells[w.wi]) === isoWeek(date)));
+    if (row) {
+      const c = row.cells.slice(); while (c.length < w.head.length) c.push("");
+      const v = parseFloat(c[w.hi]); c[w.hi] = fmtCell(Math.max(0, (isFinite(v) ? v : 0) + delta));
+      if (ai !== -1) { const a = parseFloat(c[ai]) || 0; c[ai] = fmtCell(a + delta); }
+      if (ni !== -1) c[ni] = noteCell(c[ni], addNote, removeNote);
+      put(row, c); found = true;
+    }
+  }
+  const d = dayTable(tables);
+  if (d) {
+    const ai = d.head.findIndex(c => c.startsWith("adjust")), ni = d.head.findIndex(c => c.startsWith("note"));
+    const row = d.rows.find(r => r.cells[d.di] === date);
+    if (row) {
+      const c = row.cells.slice(); while (c.length < d.head.length) c.push("");
+      const v = parseFloat(c[d.hi]); c[d.hi] = fmtCell(Math.max(0, (isFinite(v) ? v : 0) + delta));
+      if (ai !== -1) { const a = parseFloat(c[ai]) || 0; c[ai] = fmtCell(a + delta); }
+      if (ni !== -1) c[ni] = noteCell(c[ni], addNote && addNote.replace(/^[A-Z][a-z]{2} [A-Z][a-z]{2} \d+: /, ""), removeNote && removeNote.replace(/^[A-Z][a-z]{2} [A-Z][a-z]{2} \d+: /, ""));
+      put(row, c);
+    }
+  }
+  return { text: lines.join(nl), found };
+}
+function capacityLogRow(when, a, plan, undo) {
+  const what = a.kind === "off" ? "day off" : `${signed(plan.applied)} h`;
+  return `| ${when} | Capacity | — | ${dayLabel(a.date)} ${undo ? "undo " : ""}${what} (${plan.week} ${fmtH(plan.weekBefore)} → ${fmtH(plan.weekAfter)} h) | Quick capacity${a.reason ? ": " + esc(a.reason) : ""} |`;
+}
+
 // ---------- schedule change log ----------
 // prev/cur: { start, due }. Returns a list of { field, from, to }.
 function dateChanges(prev, cur) {
@@ -651,6 +814,8 @@ module.exports = {
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,
   dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,
+  parseCapacityDays, parseCapacityInput, dayUsable, dayLabel, adjustmentNote, planAdjustment, addToRules, removeLastFromRules,
+  applyCapacityDelta, capacityLogRow,
 };
 
 };
@@ -754,6 +919,10 @@ function renderCapacity(body, st, on) {
     tile(doc, "This week", cur ? `${fmtH(cur.adj)} of ${fmtH(cur.available)}` : "—", cur ? `${Math.round(cur.pct * 100)}% committed · ${fmtH(cur.raw)} raw` : "outside the planning range"),
     tile(doc, "Overloaded weeks", String(over), `at ${st.settings.overloadPct}% or more`),
     tile(doc, "At risk", String(riskCount), riskCount ? "see the list below" : "nothing at risk")));
+
+  if (on.quickCapacity) body.append(h(doc, "div", { class: "dpc-toolbar" },
+    h(doc, "span", { class: "dpc-muted" }, "Slept in, lost an afternoon or working extra? Change a day's hours; the calendar rebuild keeps it."),
+    h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.quickCapacity(), title: "Change a day's available hours (press C; command: Quick capacity)" }, "± Change hours")));
 
   const noFile = R.weeks.every(w => !w.fromFile);
   if (noFile) body.append(h(doc, "div", { class: "dpc-note" },
@@ -1322,6 +1491,7 @@ const PROGRESS_DELAY_MS = 1500;
 const FALLBACK_DELAY_MS = 6000;
 const DEFAULTS = {
   capacityFile: "Capacity.md",
+  capacityRulesFile: "Claude/capacity-rules.json",
   defaultWeeklyHours: 40,
   rangeStart: "2026-10-19",
   rangeEnd: "2026-12-11",
@@ -1347,6 +1517,7 @@ const DEFAULTS = {
   typesView: "type",
   showSubprojects: true,
   undo: {},
+  capacityLocal: [],
   pulled: {},
   openOnStartup: true,
   lastMode: "adj",
@@ -1354,13 +1525,19 @@ const DEFAULTS = {
 
 class CompanionView extends ItemView {
   constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = ({ tasks: "dotpm", queue: "board", categories: "types" })[plugin.settings.lastTab] || plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; this.openProjects = new Set();
-    // N opens Quick add while this tab is active (outside the hosted dotpm view, which has its own keys).
+    // N opens Quick add and C Quick capacity while this tab is active (outside the hosted dotpm view, which has its own keys).
     if (typeof Scope === "function") {
       this.ownScope = new Scope(this.app.scope);
       this.ownScope.register([], "n", evt => {
         const t = evt && evt.target;
         if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ""))) return true;
         new QuickAddModal(this.plugin).open();
+        return false;
+      });
+      this.ownScope.register([], "c", evt => {
+        const t = evt && evt.target;
+        if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ""))) return true;
+        new QuickCapacityModal(this.plugin).open();
         return false;
       });
       this.scope = this.ownScope;
@@ -1451,6 +1628,7 @@ class CompanionView extends ItemView {
       notToday: path => p.notToday(path),
       logTime: path => { const t = p.tasks.get(path); if (t) new LogTimeModal(p, t).open(); },
       quickAdd: () => new QuickAddModal(p).open(),
+      quickCapacity: () => new QuickCapacityModal(p).open(),
       newFromTemplate: () => p.templatePicker(),
       toggleProject: k => { if (this.openProjects.has(k)) this.openProjects.delete(k); else this.openProjects.add(k); this.refresh(); },
       openProjectNote: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
@@ -1486,6 +1664,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.addCommand({ id: "create-capacity", name: "Create capacity file", callback: () => this.createCapacityFile() });
     this.addCommand({ id: "open-projects", name: "Open project progress", callback: () => this.activateView("projects") });
     this.addCommand({ id: "quick-add", name: "Quick add task", callback: () => new QuickAddModal(this).open() });
+    this.addCommand({ id: "quick-capacity", name: "Quick capacity (change a day's hours)", callback: () => new QuickCapacityModal(this).open() });
     this.addCommand({ id: "log-time", name: "Log time…", callback: () => this.logTimePicker() });
     this.addCommand({ id: "log-time-here", name: "Log time on this task", checkCallback: checking => {
       const f = this.app.workspace.getActiveFile(); const t = f && this.tasks.get(f.path);
@@ -1906,6 +2085,81 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     await this.saveSettings();
     this.recompute();
   }
+  // ---- quick capacity: one-off changes to a day's hours ----
+  // The change is stored in the rules file (so the calendar rebuild keeps it) and applied to Capacity.md now.
+  async readRules() {
+    const p = normalizePath(this.settings.capacityRulesFile);
+    try { if (!(await this.app.vault.adapter.exists(p))) return null; return JSON.parse(await this.app.vault.adapter.read(p)); }
+    catch (e) { console.warn("[dotpm-companion] could not read capacity rules", e); return { __error: String(e.message || e) }; }
+  }
+  async writeRules(rules) {
+    const p = normalizePath(this.settings.capacityRulesFile);
+    await this.app.vault.adapter.write(p, JSON.stringify(rules, null, 2) + "\n");
+  }
+  async capacityText() {
+    const f = this.app.vault.getAbstractFileByPath(normalizePath(this.settings.capacityFile));
+    return f instanceof TFile ? await this.app.vault.read(f) : null;
+  }
+  // Everything the preview needs, without writing anything.
+  async planCapacity(a) {
+    const rules = await this.readRules();
+    const md = await this.capacityText();
+    const ctx = { rules: rules && !rules.__error ? rules : null, weekly: md ? M.parseCapacity(md) : {}, days: md ? M.parseCapacityDays(md) : {}, fallbackWeekly: this.settings.defaultWeeklyHours };
+    const plan = M.planAdjustment(a, ctx);
+    const w = this.result && this.result.weeks.find(x => x.week === plan.week);
+    plan.load = w ? { adj: w.adj, before: plan.weekBefore > 0 ? w.adj / plan.weekBefore : null, after: plan.weekAfter > 0 ? w.adj / plan.weekAfter : null } : null;
+    plan.rulesState = !rules ? "missing" : rules.__error ? "unreadable" : "ok";
+    plan.hasFile = md != null;
+    plan.inRange = a.date >= this.settings.rangeStart && a.date <= this.settings.rangeEnd;
+    return plan;
+  }
+  async applyCapacity(a) {
+    const plan = await this.planCapacity(a);
+    if (!plan.hasFile) throw new Error(`${this.settings.capacityFile} not found.`);
+    if (plan.rulesState === "unreadable") throw new Error(`Couldn't read ${this.settings.capacityRulesFile}; nothing changed.`);
+    if (a.kind === "off" && plan.offAlready) throw new Error(`${M.dayLabel(a.date)} is already a day off.`);
+    const added = new Date().toISOString();
+    if (plan.rulesState === "ok") await this.writeRules(M.addToRules(await this.readRules(), a, plan.applied, added));
+    const note = M.adjustmentNote(a);
+    const f = this.app.vault.getAbstractFileByPath(normalizePath(this.settings.capacityFile));
+    await this.app.vault.process(f, md => M.applyCapacityDelta(md, a.date, plan.applied, note, null).text);
+    if (plan.rulesState !== "ok") {
+      // no rules file: keep the undo record in settings instead
+      (this.settings.capacityLocal = this.settings.capacityLocal || []).push({ ...a, applied: plan.applied, added, note });
+      await this.saveSettings();
+    }
+    await this.logCapacity(a, plan, false);
+    await this.loadCapacity(); this.recompute();
+    return plan;
+  }
+  async undoCapacity() {
+    const rules = await this.readRules();
+    const local = this.settings.capacityLocal || [];
+    const r = rules && !rules.__error ? M.removeLastFromRules(rules) : null;
+    const rulesAdded = r ? String(((rules.adjustments || []).concat((rules.holidays || []).filter(x => x.by === "quick-capacity"))).map(x => x.added || "").sort().pop()) : "";
+    const lastLocal = local.length ? local[local.length - 1] : null;
+    let removed;
+    if (r && (!lastLocal || rulesAdded >= String(lastLocal.added))) { removed = r.removed; await this.writeRules(r.rules); }
+    else if (lastLocal) { removed = lastLocal; local.pop(); this.settings.capacityLocal = local; await this.saveSettings(); }
+    else throw new Error("Nothing to undo.");
+    const a = { kind: removed.kind, date: removed.date, hours: removed.hours, reason: removed.reason };
+    const f = this.app.vault.getAbstractFileByPath(normalizePath(this.settings.capacityFile));
+    let wb = this.settings.defaultWeeklyHours;
+    if (f instanceof TFile) {
+      const before = M.parseCapacity(await this.app.vault.read(f))[M.isoWeek(a.date)];
+      if (before != null) wb = before;
+      await this.app.vault.process(f, t => M.applyCapacityDelta(t, a.date, -removed.applied, null, M.adjustmentNote(a)).text);
+    }
+    await this.logCapacity(a, { week: M.isoWeek(a.date), applied: -removed.applied, weekBefore: wb, weekAfter: wb - removed.applied }, true);
+    await this.loadCapacity(); this.recompute();
+    return a;
+  }
+  async logCapacity(a, plan, undo) {
+    if (!this.settings.scheduleLog) return;
+    const d = new Date(), when = `${M.localToday()} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+    try { await this.prependTo(this.settings.scheduleLogFile, M.SCHEDULE_HEADER, [M.capacityLogRow(when, a, plan, undo)]); }
+    catch (e) { console.warn("[dotpm-companion] could not log capacity change", e); }
+  }
   async createCapacityFile() {
     const p = normalizePath(this.settings.capacityFile);
     if (this.app.vault.getAbstractFileByPath(p)) { new Notice(`${p} already exists.`); return; }
@@ -1985,6 +2239,8 @@ class CompanionSettings extends PluginSettingTab {
       .addButton(b => b.setButtonText("Show").onClick(() => new DiagnosticsModal(p).open()));
     new Setting(el).setName("Capacity file").setDesc("Markdown table with a Week column (2026-W43) and an Available hours column.")
       .addText(t => t.setValue(S.capacityFile).onChange(async v => { S.capacityFile = v.trim() || DEFAULTS.capacityFile; await save(); }));
+    new Setting(el).setName("Capacity rules file").setDesc("Rules the calendar rebuild uses. Quick capacity stores its changes here so the next rebuild keeps them.")
+      .addText(t => t.setValue(S.capacityRulesFile).onChange(async v => { S.capacityRulesFile = v.trim() || DEFAULTS.capacityRulesFile; await p.saveSettings(); }));
     new Setting(el).setName("Default hours per week").setDesc("Used for any week missing from the capacity file.")
       .addText(t => t.setValue(String(S.defaultWeeklyHours)).onChange(async v => { const n = parseFloat(v); if (n >= 0) { S.defaultWeeklyHours = n; await save(); } }));
     new Setting(el).setName("Planning range").setDesc("First and last day shown in the capacity view (YYYY-MM-DD).")
@@ -2094,6 +2350,65 @@ class QuickAddModal extends Modal {
       const proj = q.project || p.settings.quickAddProject;
       try { await p.createTask(proj, q); new Notice(`Added “${q.title}” to ${proj}.`); this.close(); }
       catch (err) { new Notice(String(err.message || err)); }
+    });
+    setTimeout(() => input.focus(), 0);
+  }
+  onClose() { this.contentEl.empty(); }
+}
+class QuickCapacityModal extends Modal {
+  constructor(plugin) { super(plugin.app); this.plugin = plugin; this.seq = 0; }
+  onOpen() {
+    const p = this.plugin, { contentEl: el } = this;
+    el.addClass("dpc-modal");
+    el.createEl("h3", { text: "Quick capacity" });
+    const input = el.createEl("input", { type: "text", cls: "dpc-modal-input", attr: { placeholder: "-1.5 sleep · -3 thu dentist · +2 sat crunch · off fri sick · undo", "aria-label": "Capacity change" } });
+    const prev = el.createDiv({ cls: "dpc-qa-preview" });
+    const warn = el.createDiv({ cls: "dpc-muted dpc-modal-hint" });
+    el.createDiv({ cls: "dpc-muted dpc-modal-hint", text: "−/+ hours (1.5, 45m, 1h30m) · day: today, tomorrow, yesterday, thu, nov 9, 11/9 (default today) · off = whole day · undo = last change · Enter to apply" });
+    const pct = v => v == null || !isFinite(v) ? "—" : `${Math.round(v * 100)} %`;
+    const h = v => `${Math.round(v * 100) / 100} h`;
+    const show = async () => {
+      const seq = ++this.seq, a = M.parseCapacityInput(input.value, M.localToday());
+      prev.empty(); warn.setText("");
+      if (!input.value.trim()) return;
+      if (!a) { warn.setText("Start with a change like “-2”, “+1.5h”, “-45m”, “off” or “undo”."); return; }
+      const chip = (k, v, muted) => prev.createSpan({ cls: "dpc-qa-chip" + (muted ? " is-default" : ""), text: `${k}: ${v}` });
+      if (a.kind === "undo") { chip("Undo", "the last Quick capacity change"); return; }
+      const plan = await p.planCapacity(a);
+      if (seq !== this.seq) return;
+      chip("Day", M.dayLabel(a.date));
+      chip("That day", `${h(plan.dayBefore)} → ${h(plan.dayAfter)}${plan.estimated ? " (est.)" : ""}`);
+      chip(plan.week, `${h(plan.weekBefore)} → ${h(plan.weekAfter)}`);
+      if (plan.load) chip("Load", `${pct(plan.load.before)} → ${pct(plan.load.after)}`, !(plan.load.after >= (p.settings.overloadPct || 85) / 100));
+      if (a.reason) chip("Why", a.reason);
+      const notes = [];
+      if (plan.clamped) notes.push(`A day holds 0–${plan.usable} h, so only ${plan.applied > 0 ? "+" : ""}${plan.applied} h applies.`);
+      if (plan.offAlready) notes.push("That day is already off.");
+      if (!plan.inRange) notes.push("Outside the planning range.");
+      if (plan.estimated) notes.push(`${p.settings.capacityFile} has no Days table yet (it appears after the next calendar rebuild), so the day is estimated as a seventh of the week.`);
+      if (plan.rulesState === "missing") notes.push(`${p.settings.capacityRulesFile} not found: the change goes into ${p.settings.capacityFile} only, and the next calendar rebuild will drop it.`);
+      if (plan.rulesState === "unreadable") notes.push(`${p.settings.capacityRulesFile} can't be read, so nothing will be changed.`);
+      if (!plan.hasFile) notes.push(`${p.settings.capacityFile} not found.`);
+      warn.setText(notes.join(" "));
+    };
+    input.addEventListener("input", () => { show(); });
+    input.addEventListener("keydown", async e => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      const a = M.parseCapacityInput(input.value, M.localToday());
+      if (!a) return;
+      try {
+        if (a.kind === "undo") {
+          const u = await p.undoCapacity();
+          new Notice(`Undid ${M.adjustmentNote(u)}.`); this.close(); return;
+        }
+        const plan = await p.applyCapacity(a);
+        const w = p.result && p.result.weeks.find(x => x.week === plan.week);
+        const over = w && w.overloaded;
+        new Notice(`${M.dayLabel(a.date)}: ${h(plan.dayBefore)} → ${h(plan.dayAfter)} · ${plan.week} now ${h(plan.weekAfter)}` +
+          (w ? ` · load ${pct(w.pct)}` : "") + (over ? ` — over ${p.settings.overloadPct || 85} %, ask Claude to re-plan this week.` : "."), over ? 10000 : 5000);
+        this.close();
+      } catch (err) { new Notice(String(err.message || err)); }
     });
     setTimeout(() => input.focus(), 0);
   }

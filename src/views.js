@@ -99,6 +99,10 @@ function renderCapacity(body, st, on) {
     tile(doc, "Overloaded weeks", String(over), `at ${st.settings.overloadPct}% or more`),
     tile(doc, "At risk", String(riskCount), riskCount ? "see the list below" : "nothing at risk")));
 
+  if (on.quickCapacity) body.append(h(doc, "div", { class: "dpc-toolbar" },
+    h(doc, "span", { class: "dpc-muted" }, "Slept in, lost an afternoon or working extra? Change a day's hours; the calendar rebuild keeps it."),
+    h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.quickCapacity(), title: "Change a day's available hours (press C; command: Quick capacity)" }, "± Change hours")));
+
   const noFile = R.weeks.every(w => !w.fromFile);
   if (noFile) body.append(h(doc, "div", { class: "dpc-note" },
     `No ${st.settings.capacityFile} found, so every week uses the default of ${st.settings.defaultWeeklyHours}h. `,

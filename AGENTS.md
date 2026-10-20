@@ -12,14 +12,14 @@ projects. dotpm owns the data (Markdown notes with frontmatter); the companion r
 
 | Path | Role |
 | --- | --- |
-| `src/model.js` | Pure logic, no Obsidian imports: date helpers, dotpm config, task parsing, capacity/spread/at-risk, queue, board, multipliers + history + measured series, project stats, quick-add and time-log parsing, schedule/spillover rows, templates, file fallbacks. Unit-tested. |
+| `src/model.js` | Pure logic, no Obsidian imports: date helpers, dotpm config, task parsing, capacity/spread/at-risk, queue, board, multipliers + history + measured series, project stats, quick-add, quick-capacity and time-log parsing, Capacity.md / rules-file edits, schedule/spillover rows, templates, file fallbacks. Unit-tested. |
 | `src/views.js` | Plain-DOM rendering of every tab (`render(root, state, handlers)`). No Obsidian helpers, so it renders in a browser for tests. |
 | `src/main.js` | Obsidian glue: plugin class, `CompanionView` (an `ItemView`), dotpm bridge, indexing, commands, modals, settings tab, logs. |
 | `styles.css` | All styles, scoped under `.dpc-root` / `.dpc-*`; colors via Obsidian CSS variables and `--dpc-s1…s9`. |
 | `build.js` | Dependency-free bundler: wraps `src/*.js` into one CommonJS `main.js`. **`main.js` is generated — edit `src/`.** |
 | `test/*.test.js` | `node --test`. `fixture/vault.json` is sample data shaped like a real vault. `embed.test.js` fakes dotpm's view; `bridge.test.js` fakes dotpm's store. |
 | `test/render.js` + `test/shots.py` | Build `test/build/render.html` and screenshot tabs with Playwright (Chromium at `/opt/pw-browsers/...` in Claude's sandbox). |
-| `tools/capacity_from_calendar.py` | Python script (standard library only) that rebuilds `Capacity.md` from a JSON list of calendar events and a rules file (`tools/capacity-rules.example.json`). Used by the scheduled capacity task. |
+| `tools/capacity_from_calendar.py` | Python script (standard library only) that rebuilds `Capacity.md` (weekly table + Days table) from a JSON list of calendar events and a rules file (`tools/capacity-rules.example.json`), applying Quick capacity's `adjustments` last. Used by the scheduled capacity task. `test/capacity.test.js` checks the plugin's instant edit matches a rebuild. |
 | `.github/workflows/release.yml` | On push to `main`: build, test, and if `manifest.json`'s version has no release yet, publish one with `main.js`, `manifest.json`, `styles.css`. |
 
 ## Commands

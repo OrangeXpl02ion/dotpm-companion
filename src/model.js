@@ -191,24 +191,58 @@ function measuredSeries(tasks, cfg) {
 }
 
 // ---------- capacity ----------
+function cellsOf(l) { return l.trim().replace(/^\||\|$/g, "").split(/(?<!\\)\|/).map(c => c.trim()); }
+function isRule(c) { return c.every(x => /^:?-+:?$/.test(x) || x === ""); }
+// Markdown tables in a file: [{ start, head (lower-case cells), rows: [{ line, cells }] }], line = index in lines.
+function tablesOf(lines) {
+  const out = []; let cur = null;
+  lines.forEach((l, i) => {
+    if (!/^\s*\|/.test(l)) { cur = null; return; }
+    const c = cellsOf(l);
+    if (!cur) { cur = { start: i, head: c.map(x => x.toLowerCase()), rows: [] }; out.push(cur); return; }
+    if (isRule(c)) return;
+    cur.rows.push({ line: i, cells: c });
+  });
+  return out;
+}
+function weekTable(tables) {
+  for (const t of tables) {
+    const wi = t.head.findIndex(c => /^week\b/.test(c) || /\bweek$/.test(c));
+    const hi = t.head.findIndex(c => c.includes("available") || c.includes("hours"));
+    if (wi !== -1 && hi !== -1) return { ...t, wi, hi };
+  }
+  return null;
+}
+// Daily table written by the capacity script: | Day | Available hours | Usable | Notes |
+function dayTable(tables) {
+  for (const t of tables) {
+    const di = t.head.findIndex(c => c === "day" || c === "date");
+    const hi = t.head.findIndex(c => c.includes("available"));
+    if (di !== -1 && hi !== -1 && !t.head.some(c => /^week\b/.test(c))) return { ...t, di, hi };
+  }
+  return null;
+}
+// Weekly hours, read from the first table that has a Week and an Available hours column.
 function parseCapacity(md) {
   const map = {};
   if (typeof md !== "string") return map;
-  const rows = md.split(/\r?\n/).filter(l => /^\s*\|/.test(l));
-  if (rows.length < 2) return map;
-  const cells = l => l.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim());
-  const head = cells(rows[0]).map(c => c.toLowerCase());
-  const wi = head.findIndex(c => c.includes("week"));
-  const hi = head.findIndex(c => c.includes("available") || c.includes("hours"));
-  if (wi === -1 || hi === -1) return map;
-  for (const r of rows.slice(1)) {
-    const c = cells(r);
-    if (c.every(x => /^:?-+:?$/.test(x) || x === "")) continue;
-    const wk = c[wi], hrs = parseFloat(c[hi]);
+  const t = weekTable(tablesOf(md.split(/\r?\n/)));
+  if (!t) return map;
+  for (const r of t.rows) {
+    const wk = r.cells[t.wi], hrs = parseFloat(r.cells[t.hi]);
     if (!isFinite(hrs)) continue;
     if (/^\d{4}-W\d{2}$/.test(wk)) map[wk] = hrs;
     else if (isDate(wk)) map[isoWeek(wk)] = hrs;
   }
+  return map;
+}
+// Daily hours from the Days table, if the file has one: { "2026-10-22": 9.5 }.
+function parseCapacityDays(md) {
+  const map = {};
+  if (typeof md !== "string") return map;
+  const t = dayTable(tablesOf(md.split(/\r?\n/)));
+  if (!t) return map;
+  for (const r of t.rows) { const d = r.cells[t.di], h = parseFloat(r.cells[t.hi]); if (isDate(d) && isFinite(h)) map[d] = h; }
   return map;
 }
 function capacityTemplate(rangeStart, rangeEnd, hours) {
@@ -491,6 +525,135 @@ function parseLogInput(text) {
   return { hours: Math.round(hours * 100) / 100, note: (m[5] || "").trim() };
 }
 
+// ---------- quick capacity ----------
+// One line that changes a day's available hours:
+//   "-1.5 sleep"  "-3 thu dentist"  "+2 sat crunch"  "-45m nap"  "off fri sick"  "undo"
+// Day words: today (default), tomorrow, yesterday, mon…sun (next one, today included), nov 9, 11/9, 2026-11-09.
+function parseCapacityInput(text, today) {
+  let rest = " " + String(text || "").trim() + " ";
+  if (/^\s*undo\s*$/i.test(rest)) return { kind: "undo" };
+  const out = { kind: null, hours: null, date: null, reason: "" };
+  const take = (re, fn) => { rest = rest.replace(re, (...m) => { const r = fn(...m); return r === false ? m[0] : " "; }); };
+  take(/\s(off|day\s+off)(?=\s)/i, () => { out.kind = "off"; });
+  if (!out.kind) {
+    // -1.5, -1.5h, +2 hours, -45m, -1h30m
+    take(/\s([+\-−])\s?(\d+(?:\.\d+)?)\s?(h|hrs?|hours?|m|mins?|minutes?)?(?:\s?(\d+)\s?(?:m|mins?|minutes?))?(?=\s)/i, (m, sign, n, u, n2) => {
+      if (out.hours != null) return false;
+      const isMin = !!u && /^m/i.test(u);
+      if (isMin && n2) return false;
+      if (n2 && !u) return false;
+      const h = isMin ? Number(n) / 60 : parseFloat(n) + (n2 ? Number(n2) / 60 : 0);
+      out.hours = h * (sign === "+" ? 1 : -1); out.kind = "adjust";
+    });
+  }
+  if (!out.kind) return null;
+  const setDate = d => { if (!d || out.date) return false; out.date = d; };
+  take(/\s(today|tod)(?=\s)/i, () => setDate(today));
+  take(/\s(tomorrow|tmr|tom)(?=\s)/i, () => setDate(addDays(today, 1)));
+  take(/\s(yesterday|yday)(?=\s)/i, () => setDate(addDays(today, -1)));
+  take(/\s([a-z]{3,9})\.?\s+(\d{1,2})(?=\s)/i, (m, mon, d) => { const i = MONTHS3.indexOf(mon.slice(0, 3).toLowerCase()); if (i === -1) return false; return setDate(dateFromMonthDay(today, i + 1, Number(d))); });
+  take(/\s(\d{1,2})\/(\d{1,2})(?=\s)/, (m, mo, d) => setDate(dateFromMonthDay(today, Number(mo), Number(d))));
+  take(/\s(\d{4}-\d{2}-\d{2})(?=\s)/, (m, d) => isDate(d) ? setDate(d) : false);
+  take(/\s(mon|tue|tues|wed|thu|thur|thurs|fri|sat|sun)(day)?(?=\s)/i, (m, d) => setDate(nextWeekday(today, WEEKDAYS.indexOf(d.slice(0, 3).toLowerCase()))));
+  out.date = out.date || today;
+  out.reason = rest.replace(/\s+/g, " ").trim();
+  if (out.kind === "adjust") { out.hours = Math.round(out.hours * 100) / 100; if (!out.hours || Math.abs(out.hours) > 24) return null; }
+  return out;
+}
+// Usable hours of a day under the rules (window minus meals); the most a day can hold.
+function hm(s) { const [h, m] = String(s).split(":").map(Number); return h + (m || 0) / 60; }
+function dayUsable(rules, date) {
+  const w = rules && rules.window && rules.window[weekdayOf(date) % 6 === 0 ? "weekend" : "weekday"];
+  if (!w) return 24;
+  return Math.max(0, hm(w[1]) - hm(w[0]) - (rules.mealsHours != null ? rules.mealsHours : 2));
+}
+const DOW3 = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const MON3 = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function dayLabel(d) { return `${DOW3[weekdayOf(d)]} ${MON3[Number(d.slice(5, 7)) - 1]} ${Number(d.slice(8))}`; }
+function fmtH(h) { const r = Math.round(h * 100) / 100; return (r < 0 ? "−" : "") + Math.abs(r); }
+function signed(h) { return (h > 0 ? "+" : h < 0 ? "−" : "") + Math.abs(Math.round(h * 100) / 100); }
+// The capacity note a change leaves in Capacity.md and the script repeats on rebuild: "Thu Oct 22: −3 h dentist".
+function adjustmentNote(a) { return a.kind === "off" ? `${dayLabel(a.date)}: ${a.reason || "day off"}` : `${dayLabel(a.date)}: ${signed(a.hours)} h${a.reason ? " " + a.reason : ""}`; }
+// What a change does: dayBefore/dayAfter (hours that day), applied (the real change after clamping to 0…usable).
+// days: parseCapacityDays result; weekly: parseCapacity result; fallbackWeekly when the week is missing.
+function planAdjustment(a, ctx) {
+  const week = isoWeek(a.date);
+  const weekBefore = week in ctx.weekly ? ctx.weekly[week] : ctx.fallbackWeekly;
+  const usable = dayUsable(ctx.rules, a.date);
+  const fromDays = a.date in ctx.days;
+  const dayBefore = fromDays ? ctx.days[a.date] : Math.min(usable, weekBefore / 7);
+  const offAlready = ((ctx.rules && ctx.rules.holidays) || []).some(h => h.date === a.date);
+  let dayAfter = a.kind === "off" ? 0 : Math.max(0, Math.min(usable, dayBefore + a.hours));
+  if (offAlready) dayAfter = 0;
+  const applied = Math.round((dayAfter - dayBefore) * 100) / 100;
+  return { week, weekBefore, weekAfter: Math.round((weekBefore + applied) * 100) / 100, usable, dayBefore, dayAfter, applied, estimated: !fromDays, offAlready,
+    clamped: a.kind === "adjust" && Math.abs(applied - a.hours) > 0.001 };
+}
+// Rules file entries. Script reads "adjustments" ({date, hours, reason}) and "holidays" ({date, note}); the
+// extra "added" and "applied" fields let Undo find and reverse the change.
+function addToRules(rules, a, applied, added) {
+  const r = JSON.parse(JSON.stringify(rules || {}));
+  if (a.kind === "off") (r.holidays = r.holidays || []).push({ date: a.date, note: a.reason || "day off", added, applied, by: "quick-capacity" });
+  else (r.adjustments = r.adjustments || []).push({ date: a.date, hours: a.hours, reason: a.reason, added, applied });
+  return r;
+}
+// Remove the newest entry Quick capacity added. Returns { rules, removed: { kind, date, hours, reason, applied } } or null.
+function removeLastFromRules(rules) {
+  const r = JSON.parse(JSON.stringify(rules || {}));
+  let best = null;
+  (r.adjustments || []).forEach((x, i) => { if (x.added && (!best || x.added >= best.x.added)) best = { list: "adjustments", i, x }; });
+  (r.holidays || []).forEach((x, i) => { if (x.added && x.by === "quick-capacity" && (!best || x.added >= best.x.added)) best = { list: "holidays", i, x }; });
+  if (!best) return null;
+  r[best.list].splice(best.i, 1);
+  const x = best.x;
+  return { rules: r, removed: { kind: best.list === "holidays" ? "off" : "adjust", date: x.date, hours: x.hours, reason: best.list === "holidays" ? x.note : x.reason, applied: Number(x.applied) || 0 } };
+}
+function fmtCell(h) { return String(Math.round(h * 100) / 100); }
+function noteCell(cell, add, remove) {
+  let parts = String(cell || "").split(/\s*;\s*/).filter(Boolean);
+  if (remove) { const i = parts.indexOf(remove); if (i !== -1) parts.splice(i, 1); }
+  if (add) parts.push(add);
+  return parts.join("; ");
+}
+// Change Capacity.md in place: the week's Available hours (and Adjusted, Notes), and the day's row in the Days
+// table if there is one. delta = hours added (negative = lost). addNote / removeNote: note text for both rows.
+function applyCapacityDelta(md, date, delta, addNote, removeNote) {
+  const nl = md.includes("\r\n") ? "\r\n" : "\n";
+  const lines = md.split(/\r?\n/);
+  const tables = tablesOf(lines);
+  const put = (r, cells) => { lines[r.line] = "| " + cells.join(" | ") + " |"; };
+  const w = weekTable(tables);
+  let found = false;
+  if (w) {
+    const ai = w.head.findIndex(c => c.startsWith("adjust")), ni = w.head.findIndex(c => c.startsWith("note"));
+    const row = w.rows.find(r => r.cells[w.wi] === isoWeek(date) || (isDate(r.cells[w.wi]) && isoWeek(r.cells[w.wi]) === isoWeek(date)));
+    if (row) {
+      const c = row.cells.slice(); while (c.length < w.head.length) c.push("");
+      const v = parseFloat(c[w.hi]); c[w.hi] = fmtCell(Math.max(0, (isFinite(v) ? v : 0) + delta));
+      if (ai !== -1) { const a = parseFloat(c[ai]) || 0; c[ai] = fmtCell(a + delta); }
+      if (ni !== -1) c[ni] = noteCell(c[ni], addNote, removeNote);
+      put(row, c); found = true;
+    }
+  }
+  const d = dayTable(tables);
+  if (d) {
+    const ai = d.head.findIndex(c => c.startsWith("adjust")), ni = d.head.findIndex(c => c.startsWith("note"));
+    const row = d.rows.find(r => r.cells[d.di] === date);
+    if (row) {
+      const c = row.cells.slice(); while (c.length < d.head.length) c.push("");
+      const v = parseFloat(c[d.hi]); c[d.hi] = fmtCell(Math.max(0, (isFinite(v) ? v : 0) + delta));
+      if (ai !== -1) { const a = parseFloat(c[ai]) || 0; c[ai] = fmtCell(a + delta); }
+      if (ni !== -1) c[ni] = noteCell(c[ni], addNote && addNote.replace(/^[A-Z][a-z]{2} [A-Z][a-z]{2} \d+: /, ""), removeNote && removeNote.replace(/^[A-Z][a-z]{2} [A-Z][a-z]{2} \d+: /, ""));
+      put(row, c);
+    }
+  }
+  return { text: lines.join(nl), found };
+}
+function capacityLogRow(when, a, plan, undo) {
+  const what = a.kind === "off" ? "day off" : `${signed(plan.applied)} h`;
+  return `| ${when} | Capacity | — | ${dayLabel(a.date)} ${undo ? "undo " : ""}${what} (${plan.week} ${fmtH(plan.weekBefore)} → ${fmtH(plan.weekAfter)} h) | Quick capacity${a.reason ? ": " + esc(a.reason) : ""} |`;
+}
+
 // ---------- schedule change log ----------
 // prev/cur: { start, due }. Returns a list of { field, from, to }.
 function dateChanges(prev, cur) {
@@ -647,4 +810,6 @@ module.exports = {
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,
   dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,
+  parseCapacityDays, parseCapacityInput, dayUsable, dayLabel, adjustmentNote, planAdjustment, addToRules, removeLastFromRules,
+  applyCapacityDelta, capacityLogRow,
 };

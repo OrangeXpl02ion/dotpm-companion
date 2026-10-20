@@ -11,6 +11,10 @@ events.json is a list of events as read from Google Calendar:
 Rules (rules.json): usable window per weekday, meals, travel, regular chores, which classes count as work time,
 holidays and the planning range. Every timed event you've accepted is subtracted from capacity,
 except classes listed in "workTimeClasses", which stay as available work time.
+
+"adjustments" are one-off changes to a day ({"date": "2026-10-22", "hours": -3, "reason": "dentist"}), written by
+the companion's Quick capacity command. They are applied after everything else, and a day stays between 0 and its
+usable hours (window minus meals).
 """
 import json, sys, datetime as dt
 from zoneinfo import ZoneInfo
@@ -30,6 +34,11 @@ def main(rules_p, events_p, out_p):
     monday = start - dt.timedelta(days=start.weekday())
     last = end + dt.timedelta(days=6 - end.weekday())
     holidays = {h["date"]: h.get("note", "holiday") for h in R.get("holidays", [])}
+    adjust = {}
+    for a in R.get("adjustments", []):
+        try: h = float(a.get("hours", 0))
+        except (TypeError, ValueError): continue
+        if a.get("date") and h: adjust.setdefault(a["date"], []).append((h, a.get("reason", "")))
     credit = [s.lower() for s in R.get("workTimeClasses", [])]
     counts = set(R.get("countResponses", ["accepted", "owner"]))
     ignore = [s.lower() for s in R.get("ignoreTitles", [])]
@@ -66,20 +75,32 @@ def main(rules_p, events_p, out_p):
             else: out.append((a, b))
         return sum(b - a for a, b in out)
 
-    weeks = []
+    def sgn(h):
+        r = round(h, 2); return ("+" if r > 0 else "\u2212") + f"{abs(r):g}"
+    def label(day): return f"{day.strftime('%a %b')} {day.day}"
+
+    weeks, daily = [], []
     d = monday
     while d <= last:
-        wk = {"start": d, "avail": 0.0, "busy": 0.0, "travel": 0.0, "credit": 0.0, "chores": 0.0, "notes": []}
+        wk = {"start": d, "avail": 0.0, "busy": 0.0, "travel": 0.0, "credit": 0.0, "chores": 0.0, "adjusted": 0.0, "notes": []}
         for i in range(7):
             day = d + dt.timedelta(days=i); D = days[day]; iso = day.isoformat()
             usable = D["win"][1] - D["win"][0] - R.get("mealsHours", 2)
             if iso in holidays:
-                wk["busy"] += max(0, usable); wk["notes"].append(f"{day.strftime('%a %b')} {day.day}: {holidays[iso]}"); continue
+                wk["busy"] += max(0, usable); wk["notes"].append(f"{label(day)}: {holidays[iso]}")
+                daily.append((day, 0.0, max(0, usable), 0.0, holidays[iso])); continue
             busy = merged(D["busy"])
             travel = R.get("travelHours", 1) if D["inPerson"] else 0
             chores = sum(c.get("hours", 0) for c in R.get("chores", []) if day.weekday() in [WEEKDAYS.index(x[:3].lower()) for x in c.get("days", [])])
             wk["busy"] += busy; wk["travel"] += travel; wk["credit"] += merged(D["credit"]); wk["chores"] += chores
-            wk["avail"] += max(0, usable - busy - travel - chores)
+            base = max(0, usable - busy - travel - chores)
+            avail, notes = base, []
+            for (h, why) in adjust.get(iso, []):
+                avail += h
+                wk["notes"].append(f"{label(day)}: {sgn(h)} h" + (f" {why}" if why else "")); notes.append(f"{sgn(h)} h" + (f" {why}" if why else ""))
+            avail = min(max(0, avail), max(0, usable))
+            wk["adjusted"] += avail - base; wk["avail"] += avail
+            daily.append((day, avail, max(0, usable), avail - base, "; ".join(notes)))
         for (day, title, h, c) in used:
             if d <= day < d + dt.timedelta(days=7) and not c and not any(k.lower() in title.lower() for k in R.get("routineTitles", [])):
                 wk["notes"].append(f"{day.strftime('%a')} {title} ({h:g} h)")
@@ -96,13 +117,18 @@ def main(rules_p, events_p, out_p):
         f"- Travel: {R.get('travelHours', 1):g} h subtracted on each day with an in-person event (bus in, walk home, moving around campus).",
         *([f"- Chores: " + ", ".join(f"{c.get('label', 'chore')} {round(c.get('hours', 0) * 60):g} min ({'/'.join(c.get('days', []))})" for c in R.get("chores", [])) + "."] if R.get("chores") else []),
         "- Not subtracted: all-day items, events marked free, invites you haven't accepted, online-only events still count as busy but add no travel.",
+        "- Adjusted: one-off changes from the companion's *Quick capacity* command (`adjustments` in the rules file), e.g. a late start or an extra evening.",
         "",
-        "| Week | Starts | Available hours | Busy in calendar | Travel | Chores | Class work time | Notes |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        "| Week | Starts | Available hours | Busy in calendar | Travel | Chores | Adjusted | Class work time | Notes |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for wk in weeks:
         iso = wk["start"].isocalendar()
-        lines.append(f"| {iso[0]}-W{iso[1]:02d} | {wk['start'].isoformat()} | {round(wk['avail'] * 2) / 2:g} | {wk['busy']:.1f} | {wk['travel']:g} | {wk['chores']:.1f} | {wk['credit']:.1f} | {'; '.join(wk['notes'])} |")
+        lines.append(f"| {iso[0]}-W{iso[1]:02d} | {wk['start'].isoformat()} | {round(wk['avail'] * 2) / 2:g} | {wk['busy']:.1f} | {wk['travel']:g} | {wk['chores']:.1f} | {round(wk['adjusted'], 2):g} | {wk['credit']:.1f} | {'; '.join(wk['notes'])} |")
+    lines += ["", "## Days", "", "Available hours per day (used by *Quick capacity* to preview a change).", "",
+              "| Day | Weekday | Available hours | Usable | Adjusted | Notes |", "| --- | --- | --- | --- | --- | --- |"]
+    for (day, avail, usable, adj, note) in daily:
+        lines.append(f"| {day.isoformat()} | {day.strftime('%a')} | {round(avail, 2):g} | {round(usable, 2):g} | {round(adj, 2):g} | {note} |")
     text = "\n".join(lines) + "\n"
     with open(out_p, "w", encoding="utf-8", newline="\n") as f: f.write(text)
     print(text)

@@ -107,6 +107,18 @@ clipped to the window, overlaps counted once), **classes listed in `workTimeClas
 travel** comes off each day with an in-person event, regular **chores** (e.g. 20 min laundry on Sundays) come off their days, holidays are days off, and all-day items, free events and
 unaccepted invites are ignored. A scheduled Claude task re-runs it three times a day.
 
+The script also writes a **Days** table (one row per day: available hours, usable hours, adjustments) below the
+weekly table; the companion uses it only to preview *Quick capacity* changes and never for the weekly numbers.
+
+**One-off changes (*Quick capacity*):** don't edit the numbers by hand — the next rebuild overwrites them. The
+*Quick capacity* command stores each change in the rules file's `adjustments` list
+(`{"date": "2026-10-22", "hours": -3, "reason": "dentist"}`), or a day off in `holidays`, and changes
+`Capacity.md` at once (Available hours, *Adjusted*, *Notes*, and the day's row). The script applies adjustments after
+everything else, so the next rebuild gives the same number. A day stays between 0 and its usable hours
+(window − meals: 12 h weekdays, 10 h weekends with the default rules). Sleep isn't counted inside the window, so log
+it only when it eats into the window (a late start, a nap). The rules file is JSON: for changes made on the Mac or
+laptop to reach the desktop that runs the rebuild, Obsidian Sync needs *Sync all other types* on.
+
 ---
 
 ## 5. Commands
@@ -115,6 +127,7 @@ unaccepted invites are ignored. A scheduled Claude task re-runs it three times a
 | --- | --- |
 | Open view / Open dotpm tab / Open today's queue / Open project progress | Jump to a tab. |
 | **Quick add task** (press **N** in the companion; assign a global hotkey in Settings → Hotkeys) | One line, e.g. `render toaster hero shot fri 3h p1 #cad`. Project by full name or `@prefix`; dates `today`, `tomorrow`, `fri`, `nov 9`, `9 nov`, `12/5`, `2026-12-05`, `+3d`, `+2w`, `next week`; estimate `3h`, `90m`; priority `p1`–`p4` (= dotpm priority order); `#worktype` sets the work type (and files into a project of the same name, e.g. `#fun` → Fun), other `#tags` become tags. No project → *Quick-add default project*. |
+| **Quick capacity (change a day's hours)** (press **C** in the companion, or *± Change hours* on the Capacity tab) | One line: `-1.5 sleep`, `-3 thu dentist`, `+2 sat crunch`, `-45m nap`, `-1h30m call`, `off fri sick` (whole day off), `undo` (reverses the last change). Day words: `today` (default), `tomorrow`, `yesterday`, `mon`…`sun` (next one, today included), `nov 9`, `11/9`, `2026-11-09`. The preview shows the day and week before → after and the week's load; Enter applies it, adds a row to `Schedule log.md`, and warns when the week goes over the overload threshold. See §4. |
 | **Log time…** / **Log time on this task** | `2h`, `45m`, `1h30m`, `1.5`, optionally followed by a note (`2h -- glued legs`). Logged for today. |
 | **New project from template** | Templates are notes in *Templates folder* (default `Templates/Projects`) containing a table `\| Task \| Work type \| Hours \| Start day \| Days \| After \| Done when \|`. *Start day* counts from the project start (0 = first day), *After* = comma-separated task names it waits on, *Done when* items separated by `;`. An example *Case study* template is created the first time. |
 | Write last week's spillover now | Writes the previous week's unfinished tasks to `Spillover.md`. |
@@ -130,6 +143,7 @@ unaccepted invites are ignored. A scheduled Claude task re-runs it three times a
 | Setting | Default | Notes |
 | --- | --- | --- |
 | Capacity file | `Capacity.md` | |
+| Capacity rules file | `Claude/capacity-rules.json` | Where *Quick capacity* stores its changes for the calendar rebuild. If it's missing, changes go into `Capacity.md` only and the next rebuild drops them. |
 | Default hours per week | 40 | For weeks missing from the capacity file. |
 | Planning range | 2026-10-19 → 2026-12-11 | Weeks shown in Capacity / Board / Work types. |
 | Overload threshold | 85 % | |

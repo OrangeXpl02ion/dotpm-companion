@@ -64,7 +64,7 @@ Keep a personal copy of this playbook in the vault (for example `Claude scheduli
 | "Add a task …" | Create it in the right project with work type, estimate, due date, priority and Done-when. If they give none of these, propose them in one line and ask once. |
 | "Move X" / "X slipped to Friday" | Shift its dates, then its dependents; report the knock-ons. |
 | "I'm behind" / "too much this week" | Compute the week's load. Propose moves in this order: lowest priority first, latest due first, never past a hard date, never break a dependency. Show the before/after load and wait for a yes. |
-| "I'm sick" / "I lose Thursday" | Lower that week's *Available hours* in `Capacity.md` (write the reason in *Notes*), then re-check the load and propose moves as above. |
+| "I'm sick" / "I lose Thursday" / "I slept in" / "I can work extra Saturday" | If `Capacity.md` is rebuilt from a rules file, add an entry to its `adjustments` (`{date, hours, reason}`, negative = lost) or a whole day to `holidays`, then re-run the rebuild — or tell the user to type it into *Quick capacity* (`-3 thu sick`, `off fri sick`). Otherwise lower that week's *Available hours* in `Capacity.md` (reason in *Notes*). Then re-check the load and propose moves as above. |
 | "New deadline for X" | Change the due date, check whether the work still fits, move dependents. |
 | "What should I do today?" | Started, unfinished tasks by priority → due date → hours left; flag anything at risk or waiting on an overdue task. Suggest at most three. |
 | "Plan my week" (Sunday) | Read `Spillover.md` and last week's logs, re-check estimates, list what's due this week, propose the order and any moves. Offer to put work blocks in the calendar set aside for proposed work. |
