@@ -1,5 +1,5 @@
 "use strict";
-const { Plugin, ItemView, PluginSettingTab, Setting, Notice, TFile, TFolder, Modal, FuzzySuggestModal, Platform, normalizePath, debounce, parseYaml } = require("obsidian");
+const { Plugin, ItemView, PluginSettingTab, Setting, Notice, TFile, TFolder, Modal, FuzzySuggestModal, Platform, Scope, normalizePath, debounce, parseYaml } = require("obsidian");
 const M = require("./model");
 const V = require("./views");
 
@@ -39,7 +39,19 @@ const DEFAULTS = {
 };
 
 class CompanionView extends ItemView {
-  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = ({ tasks: "dotpm", queue: "board" })[plugin.settings.lastTab] || plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; this.openProjects = new Set(); }
+  constructor(leaf, plugin) { super(leaf); this.plugin = plugin; this.tab = ({ tasks: "dotpm", queue: "board" })[plugin.settings.lastTab] || plugin.settings.lastTab; this.mode = plugin.settings.lastMode; this.expanded = null; this.collapsed = new Set(); this.query = ""; this.openProjects = new Set();
+    // N opens Quick add while this tab is active (outside the hosted dotpm view, which has its own keys).
+    if (typeof Scope === "function") {
+      this.ownScope = new Scope(this.app.scope);
+      this.ownScope.register([], "n", evt => {
+        const t = evt && evt.target;
+        if (t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || ""))) return true;
+        new QuickAddModal(this.plugin).open();
+        return false;
+      });
+      this.scope = this.ownScope;
+    }
+  }
   getViewType() { return VIEW_TYPE; }
   getDisplayText() { return "dotpm Companion"; }
   getIcon() { return "gauge"; }
@@ -93,7 +105,7 @@ class CompanionView extends ItemView {
     v.containerEl.remove();
   }
   switchTab(t) {
-    if (this.tab === "dotpm" && t !== "dotpm") { this.saveDotpmState(); this.scope = null; }
+    if (this.tab === "dotpm" && t !== "dotpm") { this.saveDotpmState(); this.scope = this.ownScope || null; }
     this.tab = t; this.plugin.settings.lastTab = t; this.plugin.saveSettings();
     this.dotpmError = null;
     if (t !== "dotpm" || !this.dotpmView || !this.dotpmView.containerEl.isConnected) this.contentEl.empty();
