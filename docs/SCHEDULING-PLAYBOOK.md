@@ -36,7 +36,7 @@ Keep a personal copy of this playbook in the vault (for example `Claude scheduli
 ## 3. Before changing anything
 
 1. **Read the current state.** List `Project/` and read the task notes you'll touch, plus `Capacity.md`, the newest rows of `Schedule log.md` and `Spillover.md`, and the multipliers. dotpm renames task files to slugs (e.g. `toaster-cad-assembly.md`), so find tasks by `title` or `id`, not by file name.
-2. **Work out the load.** For each week: hours left = max(0, estimate × work-type multiplier − logged), spread evenly from max(start, today) to due (logged hours are real hours, so they come off after multiplying). If logged time has reached estimate × multiplier and the task isn't done, it's over budget: ask Luke for a new estimate of what's left. Compare with *Available hours*. A week at 85 % or more is overloaded.
+2. **Work out the load.** For each week: hours left = max(0, estimate × work-type multiplier − logged), spread evenly from max(start, today) to due (logged hours are real hours, so they come off after multiplying). If logged time has reached estimate × multiplier and the task isn't done, it's over budget: ask the user for a new estimate of what's left. Compare with *Available hours*. A week at 85 % or more is overloaded.
 3. **Check whether Obsidian is open** (recently modified `.obsidian/workspace.json`, or ask). dotpm keeps tasks in memory: if Obsidian is open, a file edit can be overwritten by dotpm's next save, and dotpm ignores outside edits for 5 seconds after it saves a file itself.
    - **Many changes (re-plans, new projects):** ask the user to close Obsidian, write the files, then ask them to reopen.
    - **One or two field changes while Obsidian is open:** fine — change only the frontmatter lines involved, then ask them to glance at dotpm.
@@ -60,7 +60,7 @@ Keep a personal copy of this playbook in the vault (for example `Claude scheduli
 | The user says | Do |
 | --- | --- |
 | "I finished X" | `status: done`, `completed: <today>`, `progress: 100`, tick its Done-when boxes. If they say how long it took, add a time log. Mention what that unblocks. |
-| "I spent 3 h on X" / "X took longer" | Add `{date: today, hours, note}` to `timeLogs`. If logged > estimate, ask whether to raise the estimate for the rest. |
+| "I spent 3 h on X" / "X took longer" | Add `{date: today, hours, note}` to `timeLogs`. If logged > estimate × multiplier (over budget), ask whether to raise the estimate for the rest. |
 | "Add a task …" | Create it in the right project with work type, estimate, due date, priority and Done-when. If they give none of these, propose them in one line and ask once. |
 | "Move X" / "X slipped to Friday" | Shift its dates, then its dependents; report the knock-ons. |
 | "I'm behind" / "too much this week" | Compute the week's load. Propose moves in this order: lowest priority first, latest due first, never past a hard date, never break a dependency. Show the before/after load and wait for a yes. |
