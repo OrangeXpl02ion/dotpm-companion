@@ -1,13 +1,13 @@
 {
  "tasks": [
   {
-   "path": "Project/Fall 2026/Furniture/_tasks/concept-table.md",
+   "path": "Project/Fall 2026/Course B/_tasks/concept-stool.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Furniture|Furniture]]",
+    "projectId": "[[Course B|Course B]]",
     "parentId": null,
     "id": "99o10953mvg4c4kx",
-    "title": "concept table",
+    "title": "concept stool",
     "type": "task",
     "status": "in-progress",
     "priority": "medium",
@@ -21,16 +21,16 @@
     "createdAt": "2026-10-20T03:23:25.617000+00:00",
     "updatedAt": "2026-10-20T03:57:35.828000+00:00"
    },
-   "body": "Project: [[Furniture|Furniture]]"
+   "body": "Project: [[Course B|Course B]]"
   },
   {
-   "path": "Project/Fall 2026/Culinary Mechanics/_tasks/study-for-test.md",
+   "path": "Project/Fall 2026/Course A/_tasks/study-for-quiz.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Culinary Mechanics|Culinary Mechanics]]",
+    "projectId": "[[Course A|Course A]]",
     "parentId": null,
     "id": "tiocwddumvg4e8vs",
-    "title": "study for test",
+    "title": "study for quiz",
     "type": "task",
     "status": "todo",
     "priority": "medium",
@@ -52,7 +52,7 @@
      }
     ]
    },
-   "body": "Project: [[Culinary Mechanics|Culinary Mechanics]]"
+   "body": "Project: [[Course A|Course A]]"
   },
   {
    "path": "Project/Fall 2026/Portfolio/About Page/_tasks/about-page-build.md",
@@ -157,10 +157,10 @@
     "subtaskIds": [],
     "dependencies": [
      "[[Typeface pairing|Typeface pairing]]",
-     "[[Gardening case study page|Gardening case study page]]",
-     "[[Kettle Framer page|Kettle Framer page]]",
-     "[[Peloton Framer page revision|Peloton Framer page revision]]",
-     "[[Medical device page layout|Medical device page layout]]",
+     "[[Lantern case study page|Lantern case study page]]",
+     "[[Toaster web page|Toaster web page]]",
+     "[[Treadmill web page revision|Treadmill web page revision]]",
+     "[[Inhaler page layout|Inhaler page layout]]",
      "[[About page build|About page build]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
@@ -254,16 +254,16 @@
      "9as32nw7mvg3hsfb": "Layout"
     }
    },
-   "body": "## Done when\n- [ ] Wordmark final\n- [ ] Exported for Framer\n\nProject: [[Type and Branding|Type and Branding]]\n"
+   "body": "## Done when\n- [ ] Wordmark final\n- [ ] Exported for web\n\nProject: [[Type and Branding|Type and Branding]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Medical Device/_tasks/Medical device hero and key visuals.md",
+   "path": "Project/Fall 2026/Portfolio/Inhaler/_tasks/Inhaler hero and key visuals.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Medical Device|Medical Device]]",
+    "projectId": "[[Inhaler|Inhaler]]",
     "parentId": null,
     "id": "dzlar9qiv044vaco",
-    "title": "Medical device hero and key visuals",
+    "title": "Inhaler hero and key visuals",
     "type": "task",
     "status": "todo",
     "priority": "low",
@@ -274,7 +274,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Medical device material audit|Medical device material audit]]"
+     "[[Inhaler material audit|Inhaler material audit]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:30:00.000Z",
@@ -283,16 +283,16 @@
      "9as32nw7mvg3hsfb": "Render"
     }
    },
-   "body": "## Done when\n- [ ] Hero refreshed\n- [ ] Key visuals match the other three case studies\n\nProject: [[Medical Device|Medical Device]]\n"
+   "body": "## Done when\n- [ ] Hero refreshed\n- [ ] Key visuals match the other three case studies\n\nProject: [[Inhaler|Inhaler]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Medical Device/_tasks/Medical device story.md",
+   "path": "Project/Fall 2026/Portfolio/Inhaler/_tasks/Inhaler story.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Medical Device|Medical Device]]",
+    "projectId": "[[Inhaler|Inhaler]]",
     "parentId": null,
     "id": "3zzb9v0vg587n1wv",
-    "title": "Medical device story",
+    "title": "Inhaler story",
     "type": "task",
     "status": "todo",
     "priority": "low",
@@ -303,7 +303,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Medical device material audit|Medical device material audit]]"
+     "[[Inhaler material audit|Inhaler material audit]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:30:00.000Z",
@@ -312,16 +312,16 @@
      "9as32nw7mvg3hsfb": "Writing"
     }
    },
-   "body": "## Done when\n- [ ] Story built around 3\u20134 key decisions\n\nProject: [[Medical Device|Medical Device]]\n"
+   "body": "## Done when\n- [ ] Story built around 3–4 key decisions\n\nProject: [[Inhaler|Inhaler]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Medical Device/_tasks/Medical device page layout.md",
+   "path": "Project/Fall 2026/Portfolio/Inhaler/_tasks/Inhaler page layout.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Medical Device|Medical Device]]",
+    "projectId": "[[Inhaler|Inhaler]]",
     "parentId": null,
     "id": "hrubn36rxf9m8agj",
-    "title": "Medical device page layout",
+    "title": "Inhaler page layout",
     "type": "task",
     "status": "todo",
     "priority": "low",
@@ -332,8 +332,8 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Medical device story|Medical device story]]",
-     "[[Medical device hero and key visuals|Medical device hero and key visuals]]"
+     "[[Inhaler story|Inhaler story]]",
+     "[[Inhaler hero and key visuals|Inhaler hero and key visuals]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:30:00.000Z",
@@ -342,16 +342,16 @@
      "9as32nw7mvg3hsfb": "Layout"
     }
    },
-   "body": "## Done when\n- [ ] Laid out in the new case study template\n\nProject: [[Medical Device|Medical Device]]\n"
+   "body": "## Done when\n- [ ] Laid out in the new case study template\n\nProject: [[Inhaler|Inhaler]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Medical Device/_tasks/Medical device material audit.md",
+   "path": "Project/Fall 2026/Portfolio/Inhaler/_tasks/Inhaler material audit.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Medical Device|Medical Device]]",
+    "projectId": "[[Inhaler|Inhaler]]",
     "parentId": null,
     "id": "vhur2qj8rovj9hrs",
-    "title": "Medical device material audit",
+    "title": "Inhaler material audit",
     "type": "task",
     "status": "todo",
     "priority": "low",
@@ -369,16 +369,16 @@
      "9as32nw7mvg3hsfb": "Research"
     }
    },
-   "body": "## Done when\n- [ ] Existing material listed: what to keep, redo, drop\n\nProject: [[Medical Device|Medical Device]]\n"
+   "body": "## Done when\n- [ ] Existing material listed: what to keep, redo, drop\n\nProject: [[Inhaler|Inhaler]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Peloton/_tasks/Peloton form and styling sketches.md",
+   "path": "Project/Fall 2026/Portfolio/Treadmill/_tasks/Treadmill form and styling sketches.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Peloton|Peloton]]",
+    "projectId": "[[Treadmill|Treadmill]]",
     "parentId": null,
     "id": "wiyma41w8k7blu8j",
-    "title": "Peloton form and styling sketches",
+    "title": "Treadmill form and styling sketches",
     "type": "task",
     "status": "todo",
     "priority": "medium",
@@ -389,7 +389,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Peloton brand language and moodboard|Peloton brand language and moodboard]]"
+     "[[Treadmill brand language and moodboard|Treadmill brand language and moodboard]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:30:00.000Z",
@@ -398,16 +398,16 @@
      "9as32nw7mvg3hsfb": "Research"
     }
    },
-   "body": "## Done when\n- [ ] Sketches visibly translate the brand language\n\nProject: [[Peloton|Peloton]]\n"
+   "body": "## Done when\n- [ ] Sketches visibly translate the brand language\n\nProject: [[Treadmill|Treadmill]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Peloton/_tasks/Peloton brand language and moodboard.md",
+   "path": "Project/Fall 2026/Portfolio/Treadmill/_tasks/Treadmill brand language and moodboard.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Peloton|Peloton]]",
+    "projectId": "[[Treadmill|Treadmill]]",
     "parentId": null,
     "id": "6gfjyv9qtcmkss8s",
-    "title": "Peloton brand language and moodboard",
+    "title": "Treadmill brand language and moodboard",
     "type": "task",
     "status": "todo",
     "priority": "medium",
@@ -425,16 +425,16 @@
      "9as32nw7mvg3hsfb": "Research"
     }
    },
-   "body": "## Done when\n- [ ] Brand language analysis written\n- [ ] Styling moodboard\n\nProject: [[Peloton|Peloton]]\n"
+   "body": "## Done when\n- [ ] Brand language analysis written\n- [ ] Styling moodboard\n\nProject: [[Treadmill|Treadmill]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Peloton/_tasks/Peloton Framer page revision.md",
+   "path": "Project/Fall 2026/Portfolio/Treadmill/_tasks/Treadmill web page revision.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Peloton|Peloton]]",
+    "projectId": "[[Treadmill|Treadmill]]",
     "parentId": null,
     "id": "zulm3oww0ynj2i1r",
-    "title": "Peloton Framer page revision",
+    "title": "Treadmill web page revision",
     "type": "task",
     "status": "todo",
     "priority": "medium",
@@ -445,8 +445,8 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Peloton DFM documentation|Peloton DFM documentation]]",
-     "[[Peloton renders (hero, CMF, exploded, context)|Peloton renders (hero, CMF, exploded, context)]]"
+     "[[Treadmill DFM documentation|Treadmill DFM documentation]]",
+     "[[Treadmill renders (hero, CMF, exploded, context)|Treadmill renders (hero, CMF, exploded, context)]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:30:00.000Z",
@@ -455,16 +455,16 @@
      "9as32nw7mvg3hsfb": "Layout"
     }
    },
-   "body": "## Done when\n- [ ] Page revised and published\n- [ ] DFM and brand translation both clear\n\nProject: [[Peloton|Peloton]]\n"
+   "body": "## Done when\n- [ ] Page revised and published\n- [ ] DFM and brand translation both clear\n\nProject: [[Treadmill|Treadmill]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Peloton/_tasks/Peloton renders (hero, CMF, exploded, context).md",
+   "path": "Project/Fall 2026/Portfolio/Treadmill/_tasks/Treadmill renders (hero, CMF, exploded, context).md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Peloton|Peloton]]",
+    "projectId": "[[Treadmill|Treadmill]]",
     "parentId": null,
     "id": "wfef5tqoku169vu5",
-    "title": "Peloton renders (hero, CMF, exploded, context)",
+    "title": "Treadmill renders (hero, CMF, exploded, context)",
     "type": "task",
     "status": "todo",
     "priority": "medium",
@@ -475,7 +475,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Peloton CAD with DFM|Peloton CAD with DFM]]"
+     "[[Treadmill CAD with DFM|Treadmill CAD with DFM]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:30:00.000Z",
@@ -484,16 +484,16 @@
      "9as32nw7mvg3hsfb": "Render"
     }
    },
-   "body": "## Done when\n- [ ] Hero\n- [ ] CMF\n- [ ] Exploded\n- [ ] In context\n\nProject: [[Peloton|Peloton]]\n"
+   "body": "## Done when\n- [ ] Hero\n- [ ] CMF\n- [ ] Exploded\n- [ ] In context\n\nProject: [[Treadmill|Treadmill]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Peloton/_tasks/Peloton DFM documentation.md",
+   "path": "Project/Fall 2026/Portfolio/Treadmill/_tasks/Treadmill DFM documentation.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Peloton|Peloton]]",
+    "projectId": "[[Treadmill|Treadmill]]",
     "parentId": null,
     "id": "5geyqthw45h97pw3",
-    "title": "Peloton DFM documentation",
+    "title": "Treadmill DFM documentation",
     "type": "task",
     "status": "todo",
     "priority": "medium",
@@ -504,7 +504,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Peloton CAD with DFM|Peloton CAD with DFM]]"
+     "[[Treadmill CAD with DFM|Treadmill CAD with DFM]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:30:00.000Z",
@@ -513,16 +513,16 @@
      "9as32nw7mvg3hsfb": "Layout"
     }
    },
-   "body": "## Done when\n- [ ] Exploded view\n- [ ] BOM\n- [ ] Process callouts\n\nProject: [[Peloton|Peloton]]\n"
+   "body": "## Done when\n- [ ] Exploded view\n- [ ] BOM\n- [ ] Process callouts\n\nProject: [[Treadmill|Treadmill]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Peloton/_tasks/Peloton CAD with DFM.md",
+   "path": "Project/Fall 2026/Portfolio/Treadmill/_tasks/Treadmill CAD with DFM.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Peloton|Peloton]]",
+    "projectId": "[[Treadmill|Treadmill]]",
     "parentId": null,
     "id": "kbh6axextn8jpigu",
-    "title": "Peloton CAD with DFM",
+    "title": "Treadmill CAD with DFM",
     "type": "task",
     "status": "todo",
     "priority": "medium",
@@ -533,7 +533,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Peloton form and styling sketches|Peloton form and styling sketches]]"
+     "[[Treadmill form and styling sketches|Treadmill form and styling sketches]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:30:00.000Z",
@@ -542,16 +542,16 @@
      "9as32nw7mvg3hsfb": "CAD"
     }
    },
-   "body": "## Done when\n- [ ] Draft angles\n- [ ] Parting lines\n- [ ] Wall thickness\n- [ ] Ribs and bosses\n- [ ] Materials specified\n\nProject: [[Peloton|Peloton]]\n"
+   "body": "## Done when\n- [ ] Draft angles\n- [ ] Parting lines\n- [ ] Wall thickness\n- [ ] Ribs and bosses\n- [ ] Materials specified\n\nProject: [[Treadmill|Treadmill]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Kettle/_tasks/Kettle decision notes.md",
+   "path": "Project/Fall 2026/Portfolio/Toaster/_tasks/Toaster decision notes.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Kettle|Kettle]]",
+    "projectId": "[[Toaster|Toaster]]",
     "parentId": null,
     "id": "394tmk0j5aw70clf",
-    "title": "Kettle decision notes",
+    "title": "Toaster decision notes",
     "type": "task",
     "status": "todo",
     "priority": "high",
@@ -562,7 +562,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Kettle CAD assembly|Kettle CAD assembly]]"
+     "[[Toaster CAD assembly|Toaster CAD assembly]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:30:00.000Z",
@@ -571,16 +571,16 @@
      "9as32nw7mvg3hsfb": "Writing"
     }
    },
-   "body": "## Done when\n- [ ] 3\u20134 notes\n- [ ] Each explains why, not just what\n\nProject: [[Kettle|Kettle]]\n"
+   "body": "## Done when\n- [ ] 3–4 notes\n- [ ] Each explains why, not just what\n\nProject: [[Toaster|Toaster]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Kettle/_tasks/kettle-brief-and-framing.md",
+   "path": "Project/Fall 2026/Portfolio/Toaster/_tasks/toaster-brief-and-framing.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Kettle|Kettle]]",
+    "projectId": "[[Toaster|Toaster]]",
     "parentId": null,
     "id": "khhci7wtb1iw0yyp",
-    "title": "Kettle brief and framing",
+    "title": "Toaster brief and framing",
     "type": "task",
     "status": "todo",
     "priority": "high",
@@ -598,16 +598,16 @@
      "9as32nw7mvg3hsfb": "Writing"
     }
    },
-   "body": "## Done when\n- [ ] Repairable, Framework-inspired angle written\n- [ ] Charlie persona\n- [ ] Positioning map\n\nProject: [[Kettle|Kettle]]"
+   "body": "## Done when\n- [ ] Repairable, modular angle written\n- [ ] Sam persona\n- [ ] Positioning map\n\nProject: [[Toaster|Toaster]]"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Kettle/_tasks/kettle-cad-assembly.md",
+   "path": "Project/Fall 2026/Portfolio/Toaster/_tasks/toaster-cad-assembly.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Kettle|Kettle]]",
+    "projectId": "[[Toaster|Toaster]]",
     "parentId": null,
     "id": "0oil8b89zqjobbr8",
-    "title": "Kettle CAD assembly",
+    "title": "Toaster CAD assembly",
     "type": "task",
     "status": "todo",
     "priority": "high",
@@ -618,7 +618,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[kettle-brief-and-framing|Kettle brief and framing]]"
+     "[[toaster-brief-and-framing|Toaster brief and framing]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:15:50.921Z",
@@ -627,16 +627,16 @@
      "9as32nw7mvg3hsfb": "CAD"
     }
    },
-   "body": "## Done when\n- [ ] Full assembly including the switch\n- [ ] No interferences\n- [ ] Ready to print and render\n\nProject: [[Kettle|Kettle]]"
+   "body": "## Done when\n- [ ] Full assembly including the switch\n- [ ] No interferences\n- [ ] Ready to print and render\n\nProject: [[Toaster|Toaster]]"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Kettle/_tasks/Kettle renders (hero, exploded, context).md",
+   "path": "Project/Fall 2026/Portfolio/Toaster/_tasks/Toaster renders (hero, exploded, context).md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Kettle|Kettle]]",
+    "projectId": "[[Toaster|Toaster]]",
     "parentId": null,
     "id": "p4do6jzxo9rvmxw3",
-    "title": "Kettle renders (hero, exploded, context)",
+    "title": "Toaster renders (hero, exploded, context)",
     "type": "task",
     "status": "todo",
     "priority": "high",
@@ -647,7 +647,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Kettle CAD assembly|Kettle CAD assembly]]"
+     "[[Toaster CAD assembly|Toaster CAD assembly]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:30:00.000Z",
@@ -656,16 +656,16 @@
      "9as32nw7mvg3hsfb": "Render"
     }
    },
-   "body": "## Done when\n- [ ] Hero render\n- [ ] Exploded view shows repairability at a glance\n- [ ] In-context render\n\nProject: [[Kettle|Kettle]]\n"
+   "body": "## Done when\n- [ ] Hero render\n- [ ] Exploded view shows repairability at a glance\n- [ ] In-context render\n\nProject: [[Toaster|Toaster]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Kettle/_tasks/kettle-framer-page.md",
+   "path": "Project/Fall 2026/Portfolio/Toaster/_tasks/toaster-web-page.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Kettle|Kettle]]",
+    "projectId": "[[Toaster|Toaster]]",
     "parentId": null,
     "id": "tx8qigb8ntczy87k",
-    "title": "Kettle Framer page",
+    "title": "Toaster web page",
     "type": "task",
     "status": "todo",
     "priority": "high",
@@ -676,9 +676,9 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[kettle-3d-print|Kettle 3D print]]",
-     "[[Kettle renders (hero, exploded, context)|Kettle renders (hero, exploded, context)]]",
-     "[[Kettle decision notes|Kettle decision notes]]",
+     "[[toaster-3d-print|Toaster 3D print]]",
+     "[[Toaster renders (hero, exploded, context)|Toaster renders (hero, exploded, context)]]",
+     "[[Toaster decision notes|Toaster decision notes]]",
      "[[Typeface pairing|Typeface pairing]]",
      "[[Color palette|Color palette]]"
     ],
@@ -689,16 +689,16 @@
      "9as32nw7mvg3hsfb": "Layout"
     }
    },
-   "body": "## Done when\n- [ ] Page published\n- [ ] 30-second recruiter test passes on visuals alone\n\nProject: [[Kettle|Kettle]]"
+   "body": "## Done when\n- [ ] Page published\n- [ ] 30-second recruiter test passes on visuals alone\n\nProject: [[Toaster|Toaster]]"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Kettle/_tasks/kettle-3d-print.md",
+   "path": "Project/Fall 2026/Portfolio/Toaster/_tasks/toaster-3d-print.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Kettle|Kettle]]",
+    "projectId": "[[Toaster|Toaster]]",
     "parentId": null,
     "id": "40quifl9c6qv7uda",
-    "title": "Kettle 3D print",
+    "title": "Toaster 3D print",
     "type": "task",
     "status": "todo",
     "priority": "high",
@@ -709,7 +709,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[kettle-cad-assembly|Kettle CAD assembly]]"
+     "[[toaster-cad-assembly|Toaster CAD assembly]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:15:52.514Z",
@@ -718,7 +718,7 @@
      "9as32nw7mvg3hsfb": "Fabrication"
     }
    },
-   "body": "## Done when\n- [ ] Printed\n- [ ] Feel-tested, notes written\n- [ ] Photographed\n\nProject: [[Kettle|Kettle]]"
+   "body": "## Done when\n- [ ] Printed\n- [ ] Feel-tested, notes written\n- [ ] Photographed\n\nProject: [[Toaster|Toaster]]"
   },
   {
    "path": "Project/Fall 2026/Portfolio/Hero Showreel/_tasks/showreel-turntable-scenes.md",
@@ -739,10 +739,10 @@
     "subtaskIds": [],
     "dependencies": [
      "[[showreel-shot-list|Showreel shot list]]",
-     "[[Gardening hero and context renders|Gardening hero and context renders]]",
-     "[[Kettle renders (hero, exploded, context)|Kettle renders (hero, exploded, context)]]",
-     "[[Peloton renders (hero, CMF, exploded, context)|Peloton renders (hero, CMF, exploded, context)]]",
-     "[[Medical device hero and key visuals|Medical device hero and key visuals]]"
+     "[[Lantern hero and context renders|Lantern hero and context renders]]",
+     "[[Toaster renders (hero, exploded, context)|Toaster renders (hero, exploded, context)]]",
+     "[[Treadmill renders (hero, CMF, exploded, context)|Treadmill renders (hero, CMF, exploded, context)]]",
+     "[[Inhaler hero and key visuals|Inhaler hero and key visuals]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:16:42.877Z",
@@ -836,16 +836,16 @@
      "9as32nw7mvg3hsfb": "Render"
     }
    },
-   "body": "## Done when\n- [ ] 15\u201330 second loop\n- [ ] Loops cleanly\n- [ ] Optimized for Framer\n\nProject: [[Hero Showreel|Hero Showreel]]"
+   "body": "## Done when\n- [ ] 15–30 second loop\n- [ ] Loops cleanly\n- [ ] Optimized for web\n\nProject: [[Hero Showreel|Hero Showreel]]"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Gardening Studio/_tasks/gardening-case-study-page.md",
+   "path": "Project/Fall 2026/Portfolio/Lantern Studio/_tasks/lantern-case-study-page.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Gardening Studio|Gardening Studio]]",
+    "projectId": "[[Lantern Studio|Lantern Studio]]",
     "parentId": null,
     "id": "u3czun31hx6qyswd",
-    "title": "Gardening case study page",
+    "title": "Lantern case study page",
     "type": "task",
     "status": "todo",
     "priority": "critical",
@@ -856,7 +856,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[gardening-nov-9-presentation|Gardening Nov 9 presentation]]"
+     "[[lantern-nov-9-presentation|Lantern Nov 9 presentation]]"
     ],
     "createdAt": "2026-10-20T03:30:00+00:00",
     "updatedAt": "2026-10-20T03:15:54.006000+00:00",
@@ -865,16 +865,16 @@
      "9as32nw7mvg3hsfb": "Layout"
     }
    },
-   "body": "## Done when\n- [ ] Page built from the Nov 9 deck material\n- [ ] Ready for the Nov 20 studio final\n\nProject: [[Gardening Studio|Gardening Studio]]"
+   "body": "## Done when\n- [ ] Page built from the Nov 9 deck material\n- [ ] Ready for the Nov 20 studio final\n\nProject: [[Lantern Studio|Lantern Studio]]"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Gardening Studio/_tasks/gardening-nov-9-deck.md",
+   "path": "Project/Fall 2026/Portfolio/Lantern Studio/_tasks/lantern-nov-9-deck.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Gardening Studio|Gardening Studio]]",
+    "projectId": "[[Lantern Studio|Lantern Studio]]",
     "parentId": null,
     "id": "g1kgdwlg6uresukq",
-    "title": "Gardening Nov 9 deck",
+    "title": "Lantern Nov 9 deck",
     "type": "task",
     "status": "todo",
     "priority": "critical",
@@ -885,9 +885,9 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Gardening hero and context renders|Gardening hero and context renders]]",
-     "[[Gardening interaction sequence|Gardening interaction sequence]]",
-     "[[gardening-process-spread|Gardening process spread]]"
+     "[[Lantern hero and context renders|Lantern hero and context renders]]",
+     "[[Lantern interaction sequence|Lantern interaction sequence]]",
+     "[[lantern-process-spread|Lantern process spread]]"
     ],
     "createdAt": "2026-10-20T03:30:00+00:00",
     "updatedAt": "2026-10-20T03:20:56.592000+00:00",
@@ -896,16 +896,16 @@
      "9as32nw7mvg3hsfb": "Layout"
     }
    },
-   "body": "## Done when\n- [ ] Deck complete\n- [ ] Rehearsed once end to end\n\nProject: [[Gardening Studio|Gardening Studio]]"
+   "body": "## Done when\n- [ ] Deck complete\n- [ ] Rehearsed once end to end\n\nProject: [[Lantern Studio|Lantern Studio]]"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Gardening Studio/_tasks/Gardening showcase fabrication photos.md",
+   "path": "Project/Fall 2026/Portfolio/Lantern Studio/_tasks/Lantern showcase fabrication photos.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Gardening Studio|Gardening Studio]]",
+    "projectId": "[[Lantern Studio|Lantern Studio]]",
     "parentId": null,
     "id": "1bsvsht0ub8vm9dh",
-    "title": "Gardening showcase fabrication photos",
+    "title": "Lantern showcase fabrication photos",
     "type": "task",
     "status": "todo",
     "priority": "critical",
@@ -916,7 +916,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Gardening case study page|Gardening case study page]]"
+     "[[Lantern case study page|Lantern case study page]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:30:00.000Z",
@@ -925,16 +925,16 @@
      "9as32nw7mvg3hsfb": "Layout"
     }
    },
-   "body": "## Done when\n- [ ] Dec 7 showcase photos edited\n- [ ] Added to the case study page\n\nProject: [[Gardening Studio|Gardening Studio]]\n"
+   "body": "## Done when\n- [ ] Dec 7 showcase photos edited\n- [ ] Added to the case study page\n\nProject: [[Lantern Studio|Lantern Studio]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Gardening Studio/_tasks/gardening-form-exploration-and-mockups.md",
+   "path": "Project/Fall 2026/Portfolio/Lantern Studio/_tasks/lantern-form-exploration-and-mockups.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Gardening Studio|Gardening Studio]]",
+    "projectId": "[[Lantern Studio|Lantern Studio]]",
     "parentId": null,
     "id": "j7n1v3oe9zcmlc8d",
-    "title": "Gardening form exploration and mockups",
+    "title": "Lantern form exploration and mockups",
     "type": "task",
     "status": "done",
     "priority": "critical",
@@ -953,16 +953,16 @@
      "9as32nw7mvg3hsfb": "Fabrication"
     }
    },
-   "body": "## Done when\n- [x] Sketch pages scanned\n- [x] Cardboard mockups built and photographed\n- [ ] Iteration sequence that led to the final form picked out\n\nProject: [[Gardening Studio|Gardening Studio]]"
+   "body": "## Done when\n- [x] Sketch pages scanned\n- [x] Cardboard mockups built and photographed\n- [ ] Iteration sequence that led to the final form picked out\n\nProject: [[Lantern Studio|Lantern Studio]]"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Gardening Studio/_tasks/gardening-hero-and-context-renders.md",
+   "path": "Project/Fall 2026/Portfolio/Lantern Studio/_tasks/lantern-hero-and-context-renders.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Gardening Studio|Gardening Studio]]",
+    "projectId": "[[Lantern Studio|Lantern Studio]]",
     "parentId": null,
     "id": "fytlwlq350s3lu74",
-    "title": "Gardening hero and context renders",
+    "title": "Lantern hero and context renders",
     "type": "task",
     "status": "todo",
     "priority": "critical",
@@ -973,7 +973,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[gardening-mechanism-explainer|Gardening mechanism explainer]]"
+     "[[lantern-mechanism-explainer|Lantern mechanism explainer]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:28:55.062Z",
@@ -989,16 +989,16 @@
      "9as32nw7mvg3hsfb": "Render"
     }
    },
-   "body": "## Done when\n- [x] Hero render final\n- [x] 2\u20133 renders in the gardening context\n- [ ] Exported at full resolution\n\nProject: [[Gardening Studio|Gardening Studio]]"
+   "body": "## Done when\n- [x] Hero render final\n- [x] 2–3 renders in the lantern context\n- [ ] Exported at full resolution\n\nProject: [[Lantern Studio|Lantern Studio]]"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Gardening Studio/_tasks/Gardening interaction sequence.md",
+   "path": "Project/Fall 2026/Portfolio/Lantern Studio/_tasks/Lantern interaction sequence.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Gardening Studio|Gardening Studio]]",
+    "projectId": "[[Lantern Studio|Lantern Studio]]",
     "parentId": null,
     "id": "2h77rgnoaf3v08lb",
-    "title": "Gardening interaction sequence",
+    "title": "Lantern interaction sequence",
     "type": "task",
     "status": "todo",
     "priority": "critical",
@@ -1009,7 +1009,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Gardening form exploration and mockups|Gardening form exploration and mockups]]"
+     "[[Lantern form exploration and mockups|Lantern form exploration and mockups]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:30:00.000Z",
@@ -1018,16 +1018,16 @@
      "9as32nw7mvg3hsfb": "Layout"
     }
    },
-   "body": "## Done when\n- [ ] 3\u20135 frames or a storyboard\n- [ ] Use is clear without captions\n\nProject: [[Gardening Studio|Gardening Studio]]\n"
+   "body": "## Done when\n- [ ] 3–5 frames or a storyboard\n- [ ] Use is clear without captions\n\nProject: [[Lantern Studio|Lantern Studio]]\n"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Gardening Studio/_tasks/gardening-nov-9-presentation.md",
+   "path": "Project/Fall 2026/Portfolio/Lantern Studio/_tasks/lantern-nov-9-presentation.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Gardening Studio|Gardening Studio]]",
+    "projectId": "[[Lantern Studio|Lantern Studio]]",
     "parentId": null,
     "id": "qea0q0adgpbthg9w",
-    "title": "Gardening Nov 9 presentation",
+    "title": "Lantern Nov 9 presentation",
     "type": "milestone",
     "status": "todo",
     "priority": "critical",
@@ -1038,7 +1038,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[gardening-nov-9-deck|Gardening Nov 9 deck]]"
+     "[[lantern-nov-9-deck|Lantern Nov 9 deck]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:15:22.275Z",
@@ -1046,16 +1046,16 @@
      "9as32nw7mvg3hsfb": "Writing"
     }
    },
-   "body": "## Done when\n- [ ] Presented\n\nProject: [[Gardening Studio|Gardening Studio]]"
+   "body": "## Done when\n- [ ] Presented\n\nProject: [[Lantern Studio|Lantern Studio]]"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Gardening Studio/_tasks/gardening-mechanism-explainer.md",
+   "path": "Project/Fall 2026/Portfolio/Lantern Studio/_tasks/lantern-mechanism-explainer.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Gardening Studio|Gardening Studio]]",
+    "projectId": "[[Lantern Studio|Lantern Studio]]",
     "parentId": null,
     "id": "2m4bi7n7iklyr180",
-    "title": "Gardening mechanism explainer",
+    "title": "Lantern mechanism explainer",
     "type": "task",
     "status": "blocked",
     "priority": "critical",
@@ -1066,7 +1066,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[gardening-form-exploration-and-mockups|Gardening form exploration and mockups]]"
+     "[[lantern-form-exploration-and-mockups|Lantern form exploration and mockups]]"
     ],
     "createdAt": "2026-10-20T03:30:00+00:00",
     "updatedAt": "2026-10-20T03:19:30.486000+00:00",
@@ -1075,16 +1075,16 @@
      "9as32nw7mvg3hsfb": "CAD"
     }
    },
-   "body": "## Done when\n- [ ] Exploded view or cutaway modeled\n- [ ] Callouts name each part and what it does\n\nProject: [[Gardening Studio|Gardening Studio]]"
+   "body": "## Done when\n- [ ] Exploded view or cutaway modeled\n- [ ] Callouts name each part and what it does\n\nProject: [[Lantern Studio|Lantern Studio]]"
   },
   {
-   "path": "Project/Fall 2026/Portfolio/Gardening Studio/_tasks/gardening-process-spread.md",
+   "path": "Project/Fall 2026/Portfolio/Lantern Studio/_tasks/lantern-process-spread.md",
    "fm": {
     "pm-task": true,
-    "projectId": "[[Gardening Studio|Gardening Studio]]",
+    "projectId": "[[Lantern Studio|Lantern Studio]]",
     "parentId": null,
     "id": "wkw98nhr9nsr9igq",
-    "title": "Gardening process spread",
+    "title": "Lantern process spread",
     "type": "task",
     "status": "todo",
     "priority": "critical",
@@ -1095,7 +1095,7 @@
     "tags": [],
     "subtaskIds": [],
     "dependencies": [
-     "[[Gardening form exploration and mockups|Gardening form exploration and mockups]]"
+     "[[Lantern form exploration and mockups|Lantern form exploration and mockups]]"
     ],
     "createdAt": "2026-10-20T03:30:00.000Z",
     "updatedAt": "2026-10-20T03:15:22.151Z",
@@ -1104,17 +1104,11 @@
      "9as32nw7mvg3hsfb": "Layout"
     }
    },
-   "body": "## Done when\n- [ ] Research, concepts, decisions shown in 3\u20134 key moves\n\nProject: [[Gardening Studio|Gardening Studio]]"
+   "body": "## Done when\n- [ ] Research, concepts, decisions shown in 3–4 key moves\n\nProject: [[Lantern Studio|Lantern Studio]]"
   }
  ],
  "dotpm": {
   "projectsFolder": "Project/",
-  "peopleFolder": "People",
-  "excludedFolders": [],
-  "defaultView": "table",
-  "ganttGranularity": "week",
-  "ganttWeekLabel": "weekNumber",
-  "holidays": [],
   "statuses": [
    {
     "id": "todo",
@@ -1185,7 +1179,6 @@
     "icon": ""
    }
   ],
-  "priorityIcons": "chevrons",
   "customFields": [
    {
     "id": "9as32nw7mvg3hsfb",
@@ -1200,39 +1193,6 @@
      "Research"
     ]
    }
-  ],
-  "globalTeamMembers": [],
-  "showSubtreeConnections": true,
-  "lineBorders": "none",
-  "showTagColors": true,
-  "dateFormat": "",
-  "notificationsEnabled": true,
-  "notificationLeadDays": 2,
-  "autoArchiveDays": 0,
-  "lastAutoArchiveDate": "",
-  "autoSchedule": true,
-  "pullForwardOnEarlyFinish": false,
-  "saveTaskOnClose": true,
-  "taskEditorSurface": "modal",
-  "editorSaveModifier": "Shift",
-  "projectSurface": "overview",
-  "projectFilters": {},
-  "defaultFields": {},
-  "scopeViews": {},
-  "collapsedTasks": {},
-  "collapsedProjects": [],
-  "showArchivedProjects": false,
-  "projectList": {
-   "filter": {},
-   "sort": [],
-   "group": "none",
-   "activeViewId": null
-  },
-  "projectListViews": [],
-  "localApiEnabled": false,
-  "localApiPort": 27182,
-  "localApiToken": "ec4074a6a2f8b781d6e33d7c0a28f06c2b471fc1bea660b9",
-  "showReleaseNotes": true,
-  "lastSeenVersion": "2.6.0"
+  ]
  }
 }

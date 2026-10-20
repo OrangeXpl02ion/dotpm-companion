@@ -4,6 +4,7 @@
 
 ## Docs
 - [Setup guide](docs/SETUP.md): install, vault conventions (file formats), tabs, how numbers are computed, Capacity.md, commands, settings, files written, troubleshooting
+- [Scheduling playbook](docs/SCHEDULING-PLAYBOOK.md): how an assistant should read, schedule and revise tasks when the user talks about their work
 - [Agent guide](AGENTS.md): code layout, build/test/release, dotpm internals used, invariants, gotchas
 - [README](README.md): feature summary
 

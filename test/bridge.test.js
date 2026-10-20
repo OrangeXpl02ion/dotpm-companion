@@ -162,7 +162,7 @@ test("tasks in a project named like a work type get that work type", async () =>
   Object.assign(p.tasks.get(path), { project: "Fun", workType: null, customFields: { other: "x" } });
   await p.applyProjectWorkType(path);
   assert.deepEqual(calls[0][3], { customFields: { other: "x", wt: "Fun" } });
-  Object.assign(p.tasks.get(path), { project: "Kettle" });
+  Object.assign(p.tasks.get(path), { project: "Toaster" });
   await p.applyProjectWorkType(path);
   assert.equal(calls.filter(c => c[0] === "updateTask").length, 1, "no matching work type → untouched");
 });
@@ -217,12 +217,12 @@ test("schedule log groups a cause with its knock-ons on the logging device", asy
   p.isLogDevice = () => true;
   const rows = [];
   p.prependTo = async (name, header, r) => rows.push(...r);
-  const a = { path: "a", title: "Kettle CAD", project: "Kettle", start: "2026-11-02", due: "2026-11-13" };
-  const b = { path: "b", title: "Kettle renders", project: "Kettle", start: "2026-11-14", due: "2026-11-21" };
+  const a = { path: "a", title: "Toaster CAD", project: "Toaster", start: "2026-11-02", due: "2026-11-13" };
+  const b = { path: "b", title: "Toaster renders", project: "Toaster", start: "2026-11-14", due: "2026-11-21" };
   p.trackDates(a); p.trackDates(b);
   p.trackDates({ ...a, due: "2026-11-17" }); p.trackDates({ ...b, start: "2026-11-18", due: "2026-11-25" });
   clearTimeout(p.logTimer); await p.flushScheduleLog();
   assert.equal(rows.length, 2);
-  assert.match(rows[0], /Kettle CAD .* due 11-13 → 11-17 .* moved the tasks below/);
-  assert.match(rows[1], /Kettle renders .* knock-on from Kettle CAD/);
+  assert.match(rows[0], /Toaster CAD .* due 11-13 → 11-17 .* moved the tasks below/);
+  assert.match(rows[1], /Toaster renders .* knock-on from Toaster CAD/);
 });

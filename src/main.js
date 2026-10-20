@@ -703,7 +703,7 @@ class QuickAddModal extends Modal {
     const p = this.plugin, { contentEl: el } = this;
     el.addClass("dpc-modal");
     el.createEl("h3", { text: "Quick add" });
-    const input = el.createEl("input", { type: "text", cls: "dpc-modal-input", attr: { placeholder: "render kettle hero shot fri 3h p1 #cad", "aria-label": "New task" } });
+    const input = el.createEl("input", { type: "text", cls: "dpc-modal-input", attr: { placeholder: "render toaster hero shot fri 3h p1 #cad", "aria-label": "New task" } });
     const prev = el.createDiv({ cls: "dpc-qa-preview" });
     el.createDiv({ cls: "dpc-muted dpc-modal-hint", text: "Project by name or @name · fri, nov 9, 12/5, +3d · 3h or 90m · p1–p4 · #worktype or #tag · Enter to add" });
     const parse = () => M.parseQuickAdd(input.value, { today: M.localToday(), projects: Object.values(p.projectNotes).map(x => x.title), workTypes: p.cfg.workTypes, priorities: p.cfg.priorities.map(x => x.id) });

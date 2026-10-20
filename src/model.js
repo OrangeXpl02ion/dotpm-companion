@@ -107,7 +107,7 @@ function parseTask(path, fm, body, cfg) {
     deps: Array.isArray(fm.dependencies) ? fm.dependencies.map(linkTarget).filter(Boolean) : [],
   };
 }
-// "[[kettle-3d-print|Kettle 3D print]]" -> "kettle-3d-print" (the note's file name)
+// "[[toaster-3d-print|Toaster 3D print]]" -> "toaster-3d-print" (the note's file name)
 function linkTarget(v) {
   if (typeof v !== "string") return null;
   const m = v.match(/^\[\[([^\]|]+)(?:\|[^\]]*)?\]\]$/);
@@ -411,7 +411,7 @@ function dateFromMonthDay(today, m, d) {
   if (s < addDays(today, -60)) s = `${y + 1}-${pad(m)}-${pad(d)}`; // "jan 5" in December means next year
   return s;
 }
-// "render kettle hero shot fri 3h p1 #cad" → { title, project, due, estimate, priority, workType, tags }
+// "render toaster hero shot fri 3h p1 #cad" → { title, project, due, estimate, priority, workType, tags }
 function parseQuickAdd(text, ctx) {
   const today = ctx.today, out = { title: "", project: null, due: null, start: null, estimate: null, priority: null, workType: null, tags: [] };
   let rest = " " + String(text || "").trim() + " ";
@@ -425,7 +425,7 @@ function parseQuickAdd(text, ctx) {
   }
   if (!out.project) for (const p of projects) {
     const re = new RegExp(`(^|\\s)${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?=\\s)`, "i");
-    if (re.test(rest)) { out.project = p; break; } // keep the word in the title ("render kettle hero")
+    if (re.test(rest)) { out.project = p; break; } // keep the word in the title ("render toaster hero")
   }
   const take = (re, fn) => { rest = rest.replace(re, (...m) => { const r = fn(...m); return r === false ? m[0] : " "; }); };
   take(/\s(\d+(?:\.\d+)?)\s?(h|hr|hrs|hours?)(?=\s)/i, (m, n) => { out.estimate = parseFloat(n); });

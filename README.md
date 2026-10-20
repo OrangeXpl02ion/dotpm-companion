@@ -1,6 +1,6 @@
 # dotpm Companion
 
-**Setup:** [docs/SETUP.md](docs/SETUP.md) · **For AI agents / contributors:** [AGENTS.md](AGENTS.md) · [llms.txt](llms.txt)
+**Setup:** [docs/SETUP.md](docs/SETUP.md) · **For AI agents / contributors:** [AGENTS.md](AGENTS.md) · **Scheduling playbook:** [docs/SCHEDULING-PLAYBOOK.md](docs/SCHEDULING-PLAYBOOK.md) · [llms.txt](llms.txt)
 
 An Obsidian plugin that sits beside [dotpm](https://dotpm.pm) and adds cross-project planning views. It reads dotpm's Markdown task files as the only source of truth and never renames, moves or re-IDs them.
 
@@ -21,7 +21,7 @@ An Obsidian plugin that sits beside [dotpm](https://dotpm.pm) and adds cross-pro
 
 ## Commands
 
-- **Quick add task** — one line, e.g. `render kettle hero shot fri 3h p1 #cad`: project by name or `@name`, dates (`fri`, `nov 9`, `12/5`, `+3d`, `tomorrow`), estimate (`3h`, `90m`), priority `p1`–`p4`, `#worktype` (or a tag). A work-type tag naming a project files it there (`#fun` → Fun); otherwise the default project from settings.
+- **Quick add task** — one line, e.g. `render toaster hero shot fri 3h p1 #cad`: project by name or `@name`, dates (`fri`, `nov 9`, `12/5`, `+3d`, `tomorrow`), estimate (`3h`, `90m`), priority `p1`–`p4`, `#worktype` (or a tag). A work-type tag naming a project files it there (`#fun` → Fun); otherwise the default project from settings.
 - **Log time…** / **Log time on this task** — `2h`, `45m`, `1h30m`, optionally followed by a note; logged for today.
 - **New project from template** — templates are notes in `Templates/Projects` with a task table (an example *Case study* template is created the first time). Tasks, estimates, dates and dependencies are wired up.
 - **Write last week's spillover now**.

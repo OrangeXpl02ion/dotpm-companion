@@ -17,15 +17,15 @@ test("reads dotpm settings", () => {
 
 test("parses every real task file, quoted or unquoted", () => {
   assert.equal(tasks.length, 38);
-  const k = tasks.find(t => t.title === "Kettle Framer page");
+  const k = tasks.find(t => t.title === "Toaster web page");
   assert.equal(k.start, "2026-11-24"); assert.equal(k.due, "2026-11-27");
-  assert.equal(k.estimate, 8); assert.equal(k.workType, "Layout"); assert.equal(k.project, "Kettle");
-  const g = tasks.find(t => t.title === "Gardening hero and context renders");
+  assert.equal(k.estimate, 8); assert.equal(k.workType, "Layout"); assert.equal(k.project, "Toaster");
+  const g = tasks.find(t => t.title === "Lantern hero and context renders");
   assert.equal(g.logged, 2); assert.deepEqual(g.checklist, { done: 2, total: 3 });
   assert.equal(M.checklistProgress(g.checklist), 67);
-  const s = tasks.find(t => t.title === "study for test");
+  const s = tasks.find(t => t.title === "study for quiz");
   assert.equal(s.due, null);
-  const m = tasks.find(t => t.title === "Gardening Nov 9 presentation");
+  const m = tasks.find(t => t.title === "Lantern Nov 9 presentation");
   assert.equal(m.type, "milestone");
 });
 
@@ -73,7 +73,7 @@ test("capacity totals equal remaining hours (nothing lost or double-counted)", (
   }
   assert.equal(R.weeks[0].week, "2026-W43"); assert.equal(R.weeks.at(-1).week, "2026-W50");
   assert.ok(R.weeks[0].isCurrent);
-  assert.ok(R.unscheduled.some(t => t.title === "study for test"));
+  assert.ok(R.unscheduled.some(t => t.title === "study for quiz"));
 });
 
 test("hand-checked week: W48", () => {
@@ -93,7 +93,7 @@ test("hand-checked week: W48", () => {
 test("at-risk", () => {
   const today = "2026-10-20";
   const R = M.compute(tasks, cfg, settings, today);
-  const ct = tasks.find(t => t.title === "concept table");
+  const ct = tasks.find(t => t.title === "concept stool");
   assert.equal(ct.estimate, null);
   assert.equal(R.risk[ct.path], undefined, "no estimate → no hours → not at risk");
   const fake = { path: "x", title: "x", status: "todo", priority: "high", due: "2026-10-21", start: null, estimate: 10, logged: 0, workType: "CAD", logs: [] };
@@ -142,7 +142,7 @@ test("measured factor", () => {
 });
 
 test("frontmatter line edits touch only that line", () => {
-  const f = require("./fixture/vault.json").tasks.find(t => t.path.endsWith("kettle-framer-page.md"));
+  const f = require("./fixture/vault.json").tasks.find(t => t.path.endsWith("toaster-web-page.md"));
   const text = "---\npm-task: true\nstatus: todo\nprogress: 0\ndependencies:\n  - \"[[a|a]]\"\n---\n\n## Done when\n- [x] a\n\nProject: [[K|K]]";
   const out = M.setFrontmatterLines(text, { progress: "50" });
   assert.equal(out, text.replace("progress: 0", "progress: 50"));
@@ -157,9 +157,9 @@ test("frontmatter line edits touch only that line", () => {
 test("dependencies, ready tasks and candidates", () => {
   const today = "2026-10-20";
   const R = M.compute(tasks, cfg, settings, today);
-  const k = tasks.find(t => t.title === "Kettle Framer page");
-  assert.ok(k.deps.includes("kettle-3d-print") && k.deps.includes("Typeface pairing"));
-  assert.ok(R.blocked.has(k.path), "Framer page waits on unfinished tasks");
+  const k = tasks.find(t => t.title === "Toaster web page");
+  assert.ok(k.deps.includes("toaster-3d-print") && k.deps.includes("Typeface pairing"));
+  assert.ok(R.blocked.has(k.path), "web page waits on unfinished tasks");
   assert.ok(R.candidates.length > 0);
   for (const c of R.candidates) assert.ok(!R.blocked.has(c.path) && c.start > today);
   for (let i = 1; i < R.candidates.length; i++) assert.ok(M.priorityRank(cfg, R.candidates[i - 1].priority) <= M.priorityRank(cfg, R.candidates[i].priority));
@@ -194,15 +194,15 @@ test("board columns and moving between weeks", () => {
 test("project stats roll up sub-projects, planned vs actual and milestones", () => {
   const projects = [
     { path: "P/Studio/Studio.md", title: "Studio", parent: null },
-    { path: "P/Studio/G/G.md", title: "Gardening", parent: "[[P/Studio/Studio]]" },
+    { path: "P/Studio/G/G.md", title: "Lantern", parent: "[[P/Studio/Studio]]" },
   ];
   const tr = M.projectTree(projects);
-  assert.equal(tr.length, 1); assert.equal(tr[0].children[0].title, "Gardening");
+  assert.equal(tr.length, 1); assert.equal(tr[0].children[0].title, "Lantern");
   const T = (o) => ({ status: "todo", progress: 0, logged: 0, estimate: 4, type: "task", deps: [], ...o });
   const ts = [
-    T({ path: "1", project: "Gardening", start: "2026-10-01", due: "2026-10-10", status: "done", logged: 5 }),
-    T({ path: "2", project: "Gardening", start: "2026-10-15", due: "2026-10-24", progress: 50 }),
-    T({ path: "3", project: "Gardening", due: "2026-10-18", type: "milestone", estimate: null }),
+    T({ path: "1", project: "Lantern", start: "2026-10-01", due: "2026-10-10", status: "done", logged: 5 }),
+    T({ path: "2", project: "Lantern", start: "2026-10-15", due: "2026-10-24", progress: 50 }),
+    T({ path: "3", project: "Lantern", due: "2026-10-18", type: "milestone", estimate: null }),
     T({ path: "4", project: "Studio", start: "2026-11-01", due: "2026-11-05" }),
   ];
   const s = M.projectStats(tr[0], ts, cfg, "2026-10-20", {});
@@ -215,11 +215,11 @@ test("project stats roll up sub-projects, planned vs actual and milestones", () 
 });
 
 test("quick-add parsing", () => {
-  const ctx = { today: "2026-10-20", projects: ["Kettle", "Gardening Studio", "Fun"], workTypes: ["CAD", "Fun"], priorities: ["critical", "high", "medium", "low"] };
-  const q = M.parseQuickAdd("render kettle hero shot fri 3h p1 #cad", ctx);
-  assert.deepEqual([q.title, q.project, q.due, q.estimate, q.priority, q.workType], ["Render kettle hero shot", "Kettle", "2026-10-23", 3, "critical", "CAD"]);
-  assert.equal(M.parseQuickAdd("sketch nov 9 90m @gard", ctx).project, "Gardening Studio");
-  assert.equal(M.parseQuickAdd("sketch nov 9 90m @gard", ctx).estimate, 1.5);
+  const ctx = { today: "2026-10-20", projects: ["Toaster", "Lantern Studio", "Fun"], workTypes: ["CAD", "Fun"], priorities: ["critical", "high", "medium", "low"] };
+  const q = M.parseQuickAdd("render toaster hero shot fri 3h p1 #cad", ctx);
+  assert.deepEqual([q.title, q.project, q.due, q.estimate, q.priority, q.workType], ["Render toaster hero shot", "Toaster", "2026-10-23", 3, "critical", "CAD"]);
+  assert.equal(M.parseQuickAdd("sketch nov 9 90m @lant", ctx).project, "Lantern Studio");
+  assert.equal(M.parseQuickAdd("sketch nov 9 90m @lant", ctx).estimate, 1.5);
   assert.equal(M.parseQuickAdd("tickets #fun", ctx).project, "Fun");
   assert.equal(M.parseQuickAdd("plan jan 5", { ...ctx, today: "2026-12-20" }).due, "2027-01-05");
   assert.equal(M.parseQuickAdd("call +2w", ctx).due, "2026-11-03");
