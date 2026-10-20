@@ -1,5 +1,7 @@
 # dotpm Companion
 
+**Setup:** [docs/SETUP.md](docs/SETUP.md) · **For AI agents / contributors:** [AGENTS.md](AGENTS.md) · [llms.txt](llms.txt)
+
 An Obsidian plugin that sits beside [dotpm](https://dotpm.pm) and adds cross-project planning views. It reads dotpm's Markdown task files as the only source of truth and never renames, moves or re-IDs them.
 
 ## Tabs (0.6.0)

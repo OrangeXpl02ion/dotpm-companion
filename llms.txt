@@ -1,0 +1,13 @@
+# dotpm Companion
+
+> Obsidian plugin that adds cross-project planning (capacity, today's queue, weekly board, project progress, work-type multipliers, quick-add, time logging, schedule log) beside the dotpm project-management plugin, writing through dotpm's own store.
+
+## Docs
+- [Setup guide](docs/SETUP.md): install, vault conventions (file formats), tabs, how numbers are computed, Capacity.md, commands, settings, files written, troubleshooting
+- [Agent guide](AGENTS.md): code layout, build/test/release, dotpm internals used, invariants, gotchas
+- [README](README.md): feature summary
+
+## Code
+- [src/model.js](src/model.js): pure logic (tested)
+- [src/views.js](src/views.js): DOM rendering
+- [src/main.js](src/main.js): Obsidian glue and dotpm bridge
