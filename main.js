@@ -632,6 +632,7 @@ const M = require("./model");
 const V = require("./views");
 
 const VIEW_TYPE = "dotpm-companion";
+const PROGRESS_DELAY_MS = 6000;
 const DEFAULTS = {
   capacityFile: "Capacity.md",
   defaultWeeklyHours: 40,
@@ -753,10 +754,12 @@ module.exports = class DotpmCompanion extends Plugin {
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) if (leaf.view instanceof CompanionView) leaf.view.refresh();
   }
 
-  // ---- the one shared save path: debounced 1 s per file, minimal line edits in the frontmatter ----
+  // ---- the one shared save path: minimal line edits in the frontmatter ----
+  // dotpm ignores outside edits to a file for 5 s after it saves that file itself (SELF_WRITE_WINDOW_MS),
+  // so wait 6 s after the last change; otherwise dotpm keeps showing the old progress.
   queueProgress(path) {
     clearTimeout(this.pendingProgress.get(path));
-    this.pendingProgress.set(path, setTimeout(() => { this.pendingProgress.delete(path); this.writeProgress(path); }, 1000));
+    this.pendingProgress.set(path, setTimeout(() => { this.pendingProgress.delete(path); this.writeProgress(path); }, PROGRESS_DELAY_MS));
   }
   async writeProgress(path) {
     const t = this.tasks.get(path);
@@ -819,7 +822,7 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setPlaceholder("end").setValue(S.rangeEnd).onChange(async v => { if (M.isDate(v)) { S.rangeEnd = v; await save(); } }));
     new Setting(el).setName("Overload threshold").setDesc("Flag a week at this share of available hours (%).")
       .addText(t => t.setValue(String(S.overloadPct)).onChange(async v => { const n = parseFloat(v); if (n > 0) { S.overloadPct = n; await save(); } }));
-    new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks.")
+    new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks. Updates about 6 seconds after you tick a box.")
       .addToggle(t => t.setValue(S.progressFromChecklist).onChange(async v => { S.progressFromChecklist = v; await save(); }));
     new Setting(el).setName("Multipliers").setHeading();
     for (const k of V.typeKeys(p.cfg)) {
