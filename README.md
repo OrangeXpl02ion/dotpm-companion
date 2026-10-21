@@ -24,7 +24,7 @@ An Obsidian plugin that sits beside [dotpm](https://dotpm.pm) and adds cross-pro
 
 - **Quick add task** — one line, e.g. `render toaster hero shot fri 3h p1 #cad`: project by name or `@name`, dates (`fri`, `nov 9`, `12/5`, `+3d`, `tomorrow`), estimate (`3h`, `90m`), priority `p1`–`p4`, `#worktype` (or a tag). A work-type tag naming a project files it there (`#fun` → Fun); otherwise the default project from settings.
 - **Quick capacity** — one line changes a day's hours: `-1.5 sleep`, `-3 thu dentist`, `+2 sat crunch`, `off fri sick`, `undo`. Stored in the capacity rules file so the calendar rebuild keeps it, applied to `Capacity.md` at once, with a load preview and a warning when the week goes over.
-- **Log time…** / **Log time on this task** — `2h`, `45m`, `1h30m`, optionally followed by a note; logged for today.
+- **Log time…** / **Log time on this task** — `1.5h` (ends now), `2-3:30pm`, or `1.5h at 10am`, optionally followed by a note; saved with the date and start–end times.
 - **New project from template** — templates are notes in `Templates/Projects` with a task table (an example *Case study* template is created the first time). Tasks, estimates, dates and dependencies are wired up.
 - **Write last week's spillover now**.
 

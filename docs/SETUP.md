@@ -78,7 +78,7 @@ and *New project from template* commands, which go through dotpm itself.
 
 ### How the numbers are computed
 
-- **Remaining hours** = `timeEstimate − sum(timeLogs.hours)`, never below 0.
+- **Hours left** = `timeEstimate × multiplier − sum(timeLogs.hours)`, never below 0 (raw estimates mode: `timeEstimate − sum(timeLogs.hours)`).
 - **Spread rule**: remaining hours are spread evenly over each day from `max(start, today)` to `due`; overdue work lands on today; tasks without a due date are listed as unscheduled.
 - **× multipliers**: remaining hours × the task's work-type multiplier (no work type → its own multiplier).
 - **Overloaded week**: committed (× multipliers) ≥ *Overload threshold* (default 85 %) of available.
@@ -128,7 +128,7 @@ laptop to reach the desktop that runs the rebuild, Obsidian Sync needs *Sync all
 | Open view / Open dotpm tab / Open today's queue / Open project progress | Jump to a tab. |
 | **Quick add task** (press **N** in the companion; assign a global hotkey in Settings → Hotkeys) | One line, e.g. `render toaster hero shot fri 3h p1 #cad`. Project by full name or `@prefix`; dates `today`, `tomorrow`, `fri`, `nov 9`, `9 nov`, `12/5`, `2026-12-05`, `+3d`, `+2w`, `next week`; estimate `3h`, `90m`; priority `p1`–`p4` (= dotpm priority order); `#worktype` sets the work type (and files into a project of the same name, e.g. `#fun` → Fun), other `#tags` become tags. No project → *Quick-add default project*. |
 | **Quick capacity (change a day's hours)** (press **C** in the companion, or *± Change hours* on the Capacity tab) | One line: `-1.5 sleep`, `-3 thu dentist`, `+2 sat crunch`, `-45m nap`, `-1h30m call`, `off fri sick` (whole day off), `undo` (reverses the last change). Day words: `today` (default), `tomorrow`, `yesterday`, `mon`…`sun` (next one, today included), `nov 9`, `11/9`, `2026-11-09`. The preview shows the day and week before → after and the week's load; Enter applies it, adds a row to `Schedule log.md`, and warns when the week goes over the overload threshold. See §4. |
-| **Log time…** / **Log time on this task** | `2h`, `45m`, `1h30m`, `1.5`, optionally followed by a note (`2h -- glued legs`). Logged for today. |
+| **Log time…** / **Log time on this task** | `1.5`, `2h`, `45m`, `1h30m` (ends now), a range `2-3:30pm`, `14:00-15:30`, `9am–noon`, or `1.5h at 10am` / `2h from 14:00`, optionally followed by a note (`2-3:30pm sanding`). Each log is saved with its date plus `start` and `end` times (`"14:00"`, `"15:30"`); work that began before midnight is dated the day before. The box previews what it will save and shows the task's last three logs. |
 | **New project from template** | Templates are notes in *Templates folder* (default `Templates/Projects`) containing a table `\| Task \| Work type \| Hours \| Start day \| Days \| After \| Done when \|`. *Start day* counts from the project start (0 = first day), *After* = comma-separated task names it waits on, *Done when* items separated by `;`. An example *Case study* template is created the first time. |
 | Write last week's spillover now | Writes the previous week's unfinished tasks to `Spillover.md`. |
 | Update progress from Done-when checklists (all tasks) | One-off sync of every task's progress. |

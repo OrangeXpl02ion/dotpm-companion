@@ -60,7 +60,7 @@ Keep a personal copy of this playbook in the vault (for example `Claude scheduli
 | The user says | Do |
 | --- | --- |
 | "I finished X" | `status: done`, `completed: <today>`, `progress: 100`, tick its Done-when boxes. If they say how long it took, add a time log. Mention what that unblocks. |
-| "I spent 3 h on X" / "X took longer" | Add `{date: today, hours, note}` to `timeLogs`. If logged > estimate × multiplier (over budget), ask whether to raise the estimate for the rest. |
+| "I spent 3 h on X" / "X took longer" | Add `{date, hours, note, start, end}` to `timeLogs` (`start`/`end` quoted `"HH:MM"`; if no time is given, `end` = now and `start` = end − hours; keep any existing fields on older logs). If logged > estimate × multiplier (over budget), ask whether to raise the estimate for the rest. |
 | "Add a task …" | Create it in the right project with work type, estimate, due date, priority and Done-when. If they give none of these, propose them in one line and ask once. |
 | "Move X" / "X slipped to Friday" | Shift its dates, then its dependents; report the knock-ons. |
 | "I'm behind" / "too much this week" | Compute the week's load. Propose moves in this order: lowest priority first, latest due first, never past a hard date, never break a dependency. Show the before/after load and wait for a yes. |

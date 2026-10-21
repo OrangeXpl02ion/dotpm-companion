@@ -473,16 +473,24 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     if (here) { new LogTimeModal(this, here).open(); return; }
     new TaskSuggestModal(this, t => new LogTimeModal(this, t).open()).open();
   }
-  async logTime(path, hours, note) {
+  async logTime(path, v) {
     const t = this.tasks.get(path);
     const f = this.app.vault.getAbstractFileByPath(path);
     if (!t || !(f instanceof TFile)) return;
     const fm = (this.app.metadataCache.getFileCache(f) || {}).frontmatter || {};
-    const logs = (Array.isArray(fm.timeLogs) ? fm.timeLogs : []).map(l => ({ date: M.normDate(l.date) || String(l.date || ""), hours: Number(l.hours) || 0, note: typeof l.note === "string" ? l.note : "" }));
-    logs.push({ date: M.localToday(), hours, note: note || "" });
+    // keep every field already on a log (start/end times, anything dotpm adds later)
+    const logs = (Array.isArray(fm.timeLogs) ? fm.timeLogs : []).map(l => {
+      const o = { ...l, date: M.normDate(l.date) || String(l.date || ""), hours: Number(l.hours) || 0, note: typeof l.note === "string" ? l.note : "" };
+      for (const k of ["start", "end"]) { if (k in l) { const c = M.normClock(l[k]); if (c) o[k] = c; else delete o[k]; } }
+      return o;
+    });
+    const today = M.localToday(), hours = v.hours;
+    const entry = { date: v.dayOffset ? M.addDays(today, v.dayOffset) : today, hours, note: v.note || "" };
+    if (v.start) { entry.start = v.start; entry.end = v.end; }
+    logs.push(entry);
     if (this.dotpm()) await this.updateTask(path, { timeLogs: logs });
     else await this.app.vault.process(f, text => M.appendTimeLog(text, logs[logs.length - 1]));
-    new Notice(`Logged ${hours}h on “${t.title}”.`);
+    new Notice(`Logged ${M.describeLog(v)} on “${t.title}”.`);
   }
 
   // ---- quick-add and templates: create through dotpm's store ----
@@ -839,14 +847,18 @@ class LogTimeModal extends Modal {
     el.addClass("dpc-modal");
     el.createEl("h3", { text: "Log time" });
     el.createDiv({ cls: "dpc-muted", text: `${t.title} · ${t.project} · ${t.logged}/${t.estimate == null ? "?" : t.estimate}h so far` });
-    const input = el.createEl("input", { type: "text", cls: "dpc-modal-input", attr: { placeholder: "2h, 90m, 1h30m — optional note after", "aria-label": "Time spent" } });
-    const hint = el.createDiv({ cls: "dpc-muted dpc-modal-hint", text: "Logged for today. Enter to save." });
+    const input = el.createEl("input", { type: "text", cls: "dpc-modal-input", attr: { placeholder: "1.5h, 2-3:30pm, or 2h at 10am — optional note after", "aria-label": "Time spent" } });
+    const idle = "Ends now unless you give a time: “2-3:30pm”, “14:00-15:30” or “1.5h at 10am”. Enter to save.";
+    const hint = el.createDiv({ cls: "dpc-muted dpc-modal-hint", text: idle });
+    const nowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
     const go = async () => {
-      const v = M.parseLogInput(input.value);
-      if (!v) { hint.setText("Couldn't read that. Try “2h”, “45m” or “1h30m fixed the hinge”."); return; }
-      this.close(); await this.plugin.logTime(t.path, v.hours, v.note);
+      const v = M.parseLogInput(input.value, nowMin());
+      if (!v) { hint.setText("Couldn't read that. Try “2h”, “45m”, “2-3:30pm” or “1h30m at 10am fixed the hinge”."); return; }
+      this.close(); await this.plugin.logTime(t.path, v);
     };
-    input.addEventListener("input", () => { const v = M.parseLogInput(input.value); hint.setText(v ? `${v.hours}h today${v.note ? ` — “${v.note}”` : ""}. Enter to save.` : "Logged for today. Enter to save."); });
+    input.addEventListener("input", () => { const v = M.parseLogInput(input.value, nowMin()); hint.setText(v ? `${M.describeLog(v)}. Enter to save.` : idle); });
+    const recent = (t.logs || []).slice(-3).reverse();
+    if (recent.length) el.createDiv({ cls: "dpc-muted dpc-modal-hint", text: "Recent: " + recent.map(l => `${l.date ? l.date.slice(5) : "?"}${l.start ? ` ${l.start}–${l.end}` : ""} ${l.hours}h`).join(" · ") });
     input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); go(); } });
     setTimeout(() => input.focus(), 0);
   }

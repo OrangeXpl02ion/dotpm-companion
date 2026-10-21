@@ -232,10 +232,33 @@ test("quick-add parsing", () => {
 });
 
 test("time log input", () => {
-  assert.deepEqual(M.parseLogInput("1h30m -- glued legs"), { hours: 1.5, note: "glued legs" });
+  assert.deepEqual(M.parseLogInput("1h30m -- glued legs"), { hours: 1.5, note: "glued legs" }, "no clock → no times");
   assert.deepEqual(M.parseLogInput("45m"), { hours: 0.75, note: "" });
   assert.equal(M.parseLogInput("soon"), null);
   assert.equal(M.parseLogInput("30"), null, "over 24h is rejected");
+  const now = 13 * 60 + 56; // 1:56 pm
+  assert.deepEqual(M.parseLogInput("1.5 sanding", now), { hours: 1.5, note: "sanding", start: "12:26", end: "13:56", dayOffset: 0 }, "ends now");
+  assert.deepEqual(M.parseLogInput("2-3:30pm sanding", now), { hours: 1.5, note: "sanding", start: "14:00", end: "15:30", dayOffset: 0 }, "start inherits pm");
+  assert.deepEqual(M.parseLogInput("14:00-15:30", now), { hours: 1.5, note: "", start: "14:00", end: "15:30", dayOffset: 0 });
+  assert.deepEqual(M.parseLogInput("9am–noon -- renders", now), { hours: 3, note: "renders", start: "09:00", end: "12:00", dayOffset: 0 });
+  assert.deepEqual(M.parseLogInput("11pm-1am", now), { hours: 2, note: "", start: "23:00", end: "01:00", dayOffset: 0 }, "past midnight");
+  assert.deepEqual(M.parseLogInput("1.5h at 10am cad", now), { hours: 1.5, note: "cad", start: "10:00", end: "11:30", dayOffset: 0 });
+  assert.deepEqual(M.parseLogInput("2h from 14:00", now), { hours: 2, note: "", start: "14:00", end: "16:00", dayOffset: 0 });
+  assert.deepEqual(M.parseLogInput("2 polishing", now).note, "polishing", "a note starting with p isn't read as pm");
+  assert.deepEqual(M.parseLogInput("2h", 30), { hours: 2, note: "", start: "22:30", end: "00:30", dayOffset: -1 }, "began yesterday");
+  assert.equal(M.parseLogInput("2-4 legs", now), null, "bare 2-4 is neither hours nor a clear range");
+  assert.equal(M.parseLogInput("13pm-2pm", now), null);
+  assert.equal(M.normClock(836), "13:56", "base-60 number from old YAML");
+  assert.equal(M.normClock("9:05"), "09:05");
+  assert.equal(M.normClock("25:00"), null);
+  assert.match(M.describeLog(M.parseLogInput("2-3:30pm sanding", now)), /^1.5h, today 14:00–15:30 — “sanding”$/);
+});
+
+test("file fallback writes start and end", () => {
+  const out = M.appendTimeLog("---\npm-task: true\ntimeLogs: []\n---\nbody", { date: "2026-10-21", hours: 1.5, note: "x", start: "12:26", end: "13:56" });
+  assert.match(out, /timeLogs:\n  - date: 2026-10-21\n    hours: 1.5\n    note: .*\n    start: "12:26"\n    end: "13:56"\n---/);
+  const t = M.parseTask("t.md", { "pm-task": true, title: "t", timeLogs: [{ date: "2026-10-21", hours: 1.5, note: "", start: "12:26", end: "13:56" }] }, "", cfg);
+  assert.equal(t.logs[0].start, "12:26"); assert.equal(t.logs[0].end, "13:56");
 });
 
 test("spillover and templates", () => {

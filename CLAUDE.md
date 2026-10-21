@@ -63,7 +63,9 @@ task in memory otherwise leaves dotpm showing stale values until it reloads.
 
 ## Invariants
 
-- Never rename, move or re-ID dotpm files. Write only fields dotpm defines.
+- Never rename, move or re-ID dotpm files. Write only fields dotpm defines — one exception: time logs carry `start`/`end`
+  (`"HH:MM"`) beside dotpm's `date`/`hours`/`note`. dotpm copies log objects whole (`{ ...log }`) and its time panel edits
+  fields in place, so they survive its saves. When rewriting `timeLogs`, keep every field already on each log.
 - Every write goes through `updateTask` (one save path).
 - Dates are `YYYY-MM-DD` strings; YAML may give unquoted dates or `Date` objects → always `normDate`.
 - Work types come from dotpm's `work-type` field options; values no longer in the list are shown as extra types.

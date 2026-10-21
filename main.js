@@ -87,7 +87,7 @@ function parseTask(path, fm, body, cfg) {
   if (!fm || fm["pm-task"] !== true) return null;
   const logs = Array.isArray(fm.timeLogs) ? fm.timeLogs
     .filter(l => l && typeof l.hours === "number" && isFinite(l.hours))
-    .map(l => ({ date: normDate(l.date), hours: l.hours })) : [];
+    .map(l => ({ date: normDate(l.date), hours: l.hours, start: normClock(l.start), end: normClock(l.end) })) : [];
   const cf = fm.customFields && typeof fm.customFields === "object" ? fm.customFields : {};
   // Normally keyed by dotpm's field id; if that id differs on this device (dotpm settings not synced),
   // fall back to any custom-field value that is one of the work-type options.
@@ -610,13 +610,77 @@ function parseQuickAdd(text, ctx) {
 
 // ---------- time log input ----------
 // "2h", "1.5", "90m", "1h30m", "2h -- note", "2h fixed the hinge"
-function parseLogInput(text) {
-  const s = String(text || "").trim();
-  const m = s.match(/^(?:(\d+(?:\.\d+)?)\s*h(?:ours?|rs?)?\s*(?:(\d+)\s*m(?:in)?)?|(\d+)\s*m(?:in)?|(\d+(?:\.\d+)?))(?=\s|$)\s*(?:--\s*)?(.*)$/i);
+// Time log input: an amount, a time range, or both, then an optional note.
+//   "1.5"  "1h30m glued legs"  "45m"            → ends now (when you log it), starts that long before
+//   "2-3:30pm sanding"  "14:00-15:30"  "9am–noon" → that range; hours from the range
+//   "1.5 at 2pm"  "2h from 14:00"                 → starts then, ends that much later
+// `nowMin` = minutes after midnight (defaults to the whole-day case with no times).
+// Returns { hours, note, start, end, dayOffset } — start/end "HH:MM"; dayOffset -1 when the work began yesterday.
+const CLOCK = String.raw`(noon|midnight|\d{1,2}(?::\d{2})?\s*(?:am|pm|a|p)?)`;
+function clockMin(txt, pmHint) {
+  const s = String(txt).trim().toLowerCase();
+  if (s === "noon") return 12 * 60;
+  if (s === "midnight") return 0;
+  const m = s.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm|a|p)?$/);
   if (!m) return null;
-  let hours = m[1] != null ? parseFloat(m[1]) + (m[2] ? Number(m[2]) / 60 : 0) : m[3] != null ? Number(m[3]) / 60 : parseFloat(m[4]);
+  let h = Number(m[1]); const mi = m[2] ? Number(m[2]) : 0;
+  const ap = m[3] ? m[3][0] : pmHint || null;
+  if (mi > 59 || h > 23 || (ap && (h < 1 || h > 12))) return null;
+  if (ap === "p" && h < 12) h += 12;
+  if (ap === "a" && h === 12) h = 0;
+  return h * 60 + mi;
+}
+function hasMeridiem(txt) { return /(am|pm|a|p)\s*$/i.test(String(txt).trim()) || /^(noon|midnight)$/i.test(String(txt).trim()); }
+function fmtClock(min) { const m = ((Math.round(min) % 1440) + 1440) % 1440; return `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`; }
+// YAML may give "13:56", or a number if an old parser read it as base-60 (13:56 → 836).
+function normClock(v) {
+  if (typeof v === "number" && isFinite(v) && v >= 0 && v < 1440) return fmtClock(v);
+  if (typeof v !== "string") return null;
+  const m = v.trim().match(/^(\d{1,2}):(\d{2})$/);
+  return m && Number(m[1]) < 24 && Number(m[2]) < 60 ? `${m[1].padStart(2, "0")}:${m[2]}` : null;
+}
+function parseLogInput(text, nowMin) {
+  let s = String(text || "").trim();
+  let hours = null, startMin = null, endMin = null;
+  // a range at the start: "2-3:30pm", "14:00–15:30", "9am to noon"
+  const range = s.match(new RegExp(String.raw`^${CLOCK}\s*(?:-|–|—|to)\s*${CLOCK}(?=\s|$)\s*(?:--\s*)?`, "i"));
+  if (range) {
+    const [a, b] = [range[1], range[2]];
+    // a bare "2-4" reads as a range only if one end has a colon or am/pm
+    if (/[:apn]/i.test(a + b)) {
+      const bM = hasMeridiem(b) ? (b.trim().toLowerCase().match(/(a|p)m?$/) || [])[1] : null;
+      startMin = clockMin(a, hasMeridiem(a) ? null : bM);
+      endMin = clockMin(b, null);
+      if (startMin == null || endMin == null) return null;
+      let len = endMin - startMin; if (len <= 0) len += 1440; // past midnight
+      hours = len / 60;
+      s = s.slice(range[0].length);
+    }
+  }
+  if (hours == null) {
+    const m = s.match(/^(?:(\d+(?:\.\d+)?)\s*h(?:ours?|rs?)?\s*(?:(\d+)\s*m(?:in)?)?|(\d+)\s*m(?:in)?|(\d+(?:\.\d+)?))(?=\s|$)\s*/i);
+    if (!m) return null;
+    hours = m[1] != null ? parseFloat(m[1]) + (m[2] ? Number(m[2]) / 60 : 0) : m[3] != null ? Number(m[3]) / 60 : parseFloat(m[4]);
+    s = s.slice(m[0].length);
+    const at = s.match(new RegExp(String.raw`^(?:at|from|@)\s*${CLOCK}(?=\s|$)\s*`, "i"));
+    if (at) { startMin = clockMin(at[1], null); if (startMin == null) return null; s = s.slice(at[0].length); }
+  }
   if (!(hours > 0) || hours > 24) return null;
-  return { hours: Math.round(hours * 100) / 100, note: (m[5] || "").trim() };
+  hours = Math.round(hours * 100) / 100;
+  const note = s.replace(/^--\s*/, "").trim();
+  const out = { hours, note };
+  if (startMin == null && typeof nowMin === "number") { endMin = nowMin; startMin = nowMin - hours * 60; }
+  if (startMin != null) {
+    if (endMin == null) endMin = startMin + hours * 60;
+    out.dayOffset = startMin < 0 ? -1 : 0;
+    out.start = fmtClock(startMin); out.end = fmtClock(endMin);
+  }
+  return out;
+}
+function describeLog(v) {
+  if (!v) return "";
+  const when = v.start ? `${v.dayOffset ? "yesterday" : "today"} ${v.start}–${v.end}` : "today";
+  return `${v.hours}h, ${when}${v.note ? ` — “${v.note}”` : ""}`;
 }
 
 // ---------- quick capacity ----------
@@ -838,7 +902,8 @@ function appendTimeLog(text, log) {
   if (!m) return text;
   const nl = text.includes("\r\n") ? "\r\n" : "\n";
   const lines = m[1].split(/\r?\n/);
-  const entry = [`  - date: ${log.date}`, `    hours: ${log.hours}`, `    note: ${yq(log.note || "")}`];
+  const entry = [`  - date: ${log.date}`, `    hours: ${log.hours}`, `    note: ${yq(log.note || "")}`,
+    ...(log.start ? [`    start: "${log.start}"`] : []), ...(log.end ? [`    end: "${log.end}"`] : [])];
   let i = lines.findIndex(l => /^timeLogs:/.test(l));
   if (i === -1) lines.push("timeLogs:", ...entry);
   else {
@@ -904,7 +969,7 @@ module.exports = {
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,
   dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,
-  parseCapacityDays, parseCapacityInput, dayUsable, dayLabel, adjustmentNote, planAdjustment, addToRules, removeLastFromRules,
+  parseCapacityDays, parseCapacityInput, describeLog, normClock, fmtClock, dayUsable, dayLabel, adjustmentNote, planAdjustment, addToRules, removeLastFromRules,
   applyCapacityDelta, capacityLogRow,
 };
 
@@ -2060,16 +2125,24 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     if (here) { new LogTimeModal(this, here).open(); return; }
     new TaskSuggestModal(this, t => new LogTimeModal(this, t).open()).open();
   }
-  async logTime(path, hours, note) {
+  async logTime(path, v) {
     const t = this.tasks.get(path);
     const f = this.app.vault.getAbstractFileByPath(path);
     if (!t || !(f instanceof TFile)) return;
     const fm = (this.app.metadataCache.getFileCache(f) || {}).frontmatter || {};
-    const logs = (Array.isArray(fm.timeLogs) ? fm.timeLogs : []).map(l => ({ date: M.normDate(l.date) || String(l.date || ""), hours: Number(l.hours) || 0, note: typeof l.note === "string" ? l.note : "" }));
-    logs.push({ date: M.localToday(), hours, note: note || "" });
+    // keep every field already on a log (start/end times, anything dotpm adds later)
+    const logs = (Array.isArray(fm.timeLogs) ? fm.timeLogs : []).map(l => {
+      const o = { ...l, date: M.normDate(l.date) || String(l.date || ""), hours: Number(l.hours) || 0, note: typeof l.note === "string" ? l.note : "" };
+      for (const k of ["start", "end"]) { if (k in l) { const c = M.normClock(l[k]); if (c) o[k] = c; else delete o[k]; } }
+      return o;
+    });
+    const today = M.localToday(), hours = v.hours;
+    const entry = { date: v.dayOffset ? M.addDays(today, v.dayOffset) : today, hours, note: v.note || "" };
+    if (v.start) { entry.start = v.start; entry.end = v.end; }
+    logs.push(entry);
     if (this.dotpm()) await this.updateTask(path, { timeLogs: logs });
     else await this.app.vault.process(f, text => M.appendTimeLog(text, logs[logs.length - 1]));
-    new Notice(`Logged ${hours}h on “${t.title}”.`);
+    new Notice(`Logged ${M.describeLog(v)} on “${t.title}”.`);
   }
 
   // ---- quick-add and templates: create through dotpm's store ----
@@ -2426,14 +2499,18 @@ class LogTimeModal extends Modal {
     el.addClass("dpc-modal");
     el.createEl("h3", { text: "Log time" });
     el.createDiv({ cls: "dpc-muted", text: `${t.title} · ${t.project} · ${t.logged}/${t.estimate == null ? "?" : t.estimate}h so far` });
-    const input = el.createEl("input", { type: "text", cls: "dpc-modal-input", attr: { placeholder: "2h, 90m, 1h30m — optional note after", "aria-label": "Time spent" } });
-    const hint = el.createDiv({ cls: "dpc-muted dpc-modal-hint", text: "Logged for today. Enter to save." });
+    const input = el.createEl("input", { type: "text", cls: "dpc-modal-input", attr: { placeholder: "1.5h, 2-3:30pm, or 2h at 10am — optional note after", "aria-label": "Time spent" } });
+    const idle = "Ends now unless you give a time: “2-3:30pm”, “14:00-15:30” or “1.5h at 10am”. Enter to save.";
+    const hint = el.createDiv({ cls: "dpc-muted dpc-modal-hint", text: idle });
+    const nowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
     const go = async () => {
-      const v = M.parseLogInput(input.value);
-      if (!v) { hint.setText("Couldn't read that. Try “2h”, “45m” or “1h30m fixed the hinge”."); return; }
-      this.close(); await this.plugin.logTime(t.path, v.hours, v.note);
+      const v = M.parseLogInput(input.value, nowMin());
+      if (!v) { hint.setText("Couldn't read that. Try “2h”, “45m”, “2-3:30pm” or “1h30m at 10am fixed the hinge”."); return; }
+      this.close(); await this.plugin.logTime(t.path, v);
     };
-    input.addEventListener("input", () => { const v = M.parseLogInput(input.value); hint.setText(v ? `${v.hours}h today${v.note ? ` — “${v.note}”` : ""}. Enter to save.` : "Logged for today. Enter to save."); });
+    input.addEventListener("input", () => { const v = M.parseLogInput(input.value, nowMin()); hint.setText(v ? `${M.describeLog(v)}. Enter to save.` : idle); });
+    const recent = (t.logs || []).slice(-3).reverse();
+    if (recent.length) el.createDiv({ cls: "dpc-muted dpc-modal-hint", text: "Recent: " + recent.map(l => `${l.date ? l.date.slice(5) : "?"}${l.start ? ` ${l.start}–${l.end}` : ""} ${l.hours}h`).join(" · ") });
     input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); go(); } });
     setTimeout(() => input.focus(), 0);
   }

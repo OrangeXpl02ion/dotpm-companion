@@ -206,9 +206,12 @@ test("quick-add creates the task through dotpm's store", async () => {
 test("logging time appends to the task's time logs through dotpm", async () => {
   const { p, calls } = make(true);
   const path = "Project/K/_tasks/a.md";
-  p.app.metadataCache = { getFileCache: () => ({ frontmatter: { timeLogs: [{ date: "2026-10-19", hours: 1, note: "x" }] } }) };
-  await p.logTime(path, 2, "hinge");
-  assert.deepEqual(calls[0][3], { timeLogs: [{ date: "2026-10-19", hours: 1, note: "x" }, { date: M.localToday(), hours: 2, note: "hinge" }] });
+  p.app.metadataCache = { getFileCache: () => ({ frontmatter: { timeLogs: [{ date: "2026-10-19", hours: 1, note: "x", start: 836, end: "14:56" }] } }) };
+  await p.logTime(path, { hours: 2, note: "hinge", start: "12:00", end: "14:00", dayOffset: 0 });
+  assert.deepEqual(calls[0][3], { timeLogs: [{ date: "2026-10-19", hours: 1, note: "x", start: "13:56", end: "14:56" },
+    { date: M.localToday(), hours: 2, note: "hinge", start: "12:00", end: "14:00" }] }, "keeps earlier times (base-60 number fixed) and adds the new range");
+  await p.logTime(path, { hours: 1, note: "", start: "23:00", end: "01:00", dayOffset: -1 });
+  assert.equal(calls.filter(c => c[3] && c[3].timeLogs).at(-1)[3].timeLogs.at(-1).date, M.addDays(M.localToday(), -1), "work that began yesterday is dated yesterday");
 });
 
 test("schedule log groups a cause with its knock-ons on the logging device", async () => {
