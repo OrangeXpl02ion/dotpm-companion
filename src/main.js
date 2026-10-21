@@ -41,6 +41,8 @@ const DEFAULTS = {
   pulled: {},
   openOnStartup: true,
   lastMode: "adj",
+  timeMode: "day",
+  timeGroup: "type",
 };
 
 class CompanionView extends ItemView {
@@ -131,7 +133,9 @@ class CompanionView extends ItemView {
       tab: this.tab, mode: this.mode, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
       bridged: !!p.dotpm(), showMore: !!this.showMore, openProjects: this.openProjects, projects: Object.values(p.projectNotes).filter(x => !x.archived),
       spill: M.spillover(p.taskList(), p.cfg, M.mondayOf(M.localToday())), projectColors: p.projectColors, dotpmError: this.dotpmError ? String(this.dotpmError.message || this.dotpmError) : null,
-      cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity }, tasks: p.taskList(), result: p.result,
+      cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity, capacityDays: p.capacityDays || {} }, tasks: p.taskList(), result: p.result,
+      time: { mode: p.settings.timeMode, group: p.settings.timeGroup, date: this.timeDate }, today: M.localToday(),
+      nowHours: (() => { const n = new Date(); return n.getHours() + n.getMinutes() / 60; })(), workWindow: p.workWindow || null,
     }, {
       setTab: t => this.switchTab(t),
       mountDotpm: host => this.mountDotpm(host),
@@ -159,6 +163,13 @@ class CompanionView extends ItemView {
       toggleMore: () => { this.showMore = !this.showMore; this.refresh(); },
       setMultiplier: (k, v) => p.setMultiplier(k, v),
       createCapacity: () => p.createCapacityFile(),
+      setTime: patch => {
+        if (patch.mode) p.settings.timeMode = patch.mode;
+        if (patch.group) p.settings.timeGroup = patch.group;
+        if (patch.date) this.timeDate = patch.date === M.localToday() ? null : patch.date;
+        if (patch.mode || patch.group) p.saveSettings();
+        this.refresh();
+      },
     });
   }
 }
@@ -184,6 +195,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.addCommand({ id: "open-dotpm", name: "Open dotpm tab", callback: () => this.activateView("dotpm") });
     this.addCommand({ id: "open-today", name: "Open today's queue", callback: () => { this.settings.boardMode = "today"; this.activateView("board"); } });
     this.addCommand({ id: "create-capacity", name: "Create capacity file", callback: () => this.createCapacityFile() });
+    this.addCommand({ id: "open-time", name: "Open time spent", callback: () => this.activateView("time") });
     this.addCommand({ id: "open-projects", name: "Open project progress", callback: () => this.activateView("projects") });
     this.addCommand({ id: "quick-add", name: "Quick add task", callback: () => new QuickAddModal(this).open() });
     this.addCommand({ id: "quick-capacity", name: "Quick capacity (change a day's hours)", callback: () => new QuickCapacityModal(this).open() });

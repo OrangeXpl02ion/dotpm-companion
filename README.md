@@ -15,6 +15,7 @@ An Obsidian plugin that sits beside [dotpm](https://dotpm.pm) and adds cross-pro
 - **Work types**: stacked hours per week by `work-type`, with the available-hours line and a table.
 - **Work types → By category**: the same chart split by project, every sub-project a shade of its top-level category's color; *Show sub-projects* off gives one segment per category.
 - **Multipliers**: one per work-type (default 2.0×), change history and trend chart, with the measured factor (cumulative logged ÷ estimate of done tasks, by completion date) as a dashed line beside it.
+- **Time** (0.11.0): where logged time went, like a phone's screen-time report. *Day* (opens on today) shows the total, available hours from Capacity.md, minutes worked in each hour (from each log's start and end) coloured by work type, and a "now" line. *Week* shows a bar per day over its available hours, with the daily average; click a day to open it. Below: time by work type or by project, and each task worked on, sorted by time spent, with a bar of time logged (this period solid, earlier faded) against estimate × multiplier, and that period's sessions. Command *Open time spent*.
 - **Progress from checklist**: progress = ticked share of the `## Done when` checklist.
 - **dotpm default sort**: any dotpm view still on dotpm's default (status) is switched once to due date, then priority. A sort you pick in dotpm afterwards is kept.
 - **Work type from project**: a task without a work type in a project named like a work type (IDSA, Fun, Misc…) gets that work type.

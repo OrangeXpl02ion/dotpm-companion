@@ -236,3 +236,54 @@
 .dpc-legend-cat .dpc-swatch { margin-right: 0; }
 .dpc-check { display: inline-flex; align-items: center; gap: 6px; color: var(--text-normal); cursor: pointer; white-space: nowrap; }
 .dpc-check input { margin: 0; }
+
+/* ---------- Time tab ---------- */
+.dpc-time-top { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+.dpc-time-nav { display: flex; align-items: center; gap: 6px; }
+.dpc-time-nav button { min-width: 28px; }
+.dpc-time-nav button:disabled { opacity: .4; cursor: default; }
+.dpc-time-label { min-width: 120px; text-align: center; font-weight: 600; }
+.dpc-time-head { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 20px; margin-bottom: 10px; }
+.dpc-time-k { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-muted); }
+.dpc-time-big { font-size: 34px; font-weight: 700; letter-spacing: -.02em; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.dpc-time-sub { font-size: 12px; }
+.dpc-time-stats { display: flex; gap: 20px; flex-wrap: wrap; }
+.dpc-time-v { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.dpc-time-now { stroke: var(--text-accent); stroke-width: 1.5; }
+.dpc-tick.dpc-time-now-label { fill: var(--text-accent); }
+.dpc-time-avail { fill: var(--background-secondary); stroke: var(--background-modifier-border); }
+.dpc-time-avail-sw { background: var(--background-secondary); border: 1px solid var(--background-modifier-border); }
+.dpc-time-avg { stroke: var(--color-green); stroke-width: 1.5; stroke-dasharray: 5 4; }
+.dpc-tick.dpc-time-avg-label { fill: var(--color-green); }
+.dpc-time-day { cursor: pointer; }
+.dpc-time-day.is-future { cursor: default; }
+.dpc-time-day:focus-visible { outline: 2px solid var(--text-accent); }
+.dpc-time-note { font-size: 12px; margin: 4px 0 0; }
+.dpc-time-sec { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-top: 18px; }
+.dpc-time-sec .dpc-h { margin: 0; }
+.dpc-time-groups { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 24px; margin: 10px 0 6px; }
+.dpc-time-group { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 4px 0; font-size: 13px; }
+.dpc-time-gname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dpc-time-gbar { grid-column: 1 / -1; height: 5px; background: var(--background-secondary); border-radius: 3px; overflow: hidden; }
+.dpc-time-gbar > div { height: 100%; border-radius: 3px; }
+.dpc-time-sw { display: inline-block; width: 16px; height: 8px; border-radius: 4px; background: var(--dpc-s1); }
+.dpc-time-sw.is-before { opacity: .38; }
+.dpc-time-tick-sw { display: inline-block; width: 2px; height: 12px; background: var(--text-normal); }
+.dpc-time-rows { display: flex; flex-direction: column; }
+.dpc-time-row { display: flex; flex-direction: column; gap: 6px; padding: 10px 0; border-top: 1px solid var(--background-modifier-border); }
+.dpc-time-row:first-child { border-top: 0; }
+.dpc-time-rtop { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; }
+.dpc-time-rname { min-width: 0; }
+.dpc-time-rname .dpc-task-link { font-weight: 600; }
+.dpc-time-meta { font-size: 12px; margin-top: 2px; }
+.dpc-time-meta .dpc-swatch { width: 8px; height: 8px; margin: 0 4px 0 0; }
+.dpc-time-here { font-weight: 700; font-size: 15px; white-space: nowrap; }
+.dpc-time-cmp { display: grid; grid-template-columns: minmax(0, 1fr) 15.5em; gap: 10px; align-items: center; }
+.dpc-time-track { position: relative; height: 10px; background: var(--background-secondary); border-radius: 5px; }
+.dpc-time-fill { position: absolute; top: 0; bottom: 0; border-radius: 5px; }
+.dpc-time-fill.is-before { opacity: .38; }
+.dpc-time-over { position: absolute; top: 0; bottom: 0; border-radius: 0 5px 5px 0; background: repeating-linear-gradient(135deg, var(--color-red) 0 3px, transparent 3px 6px); }
+.dpc-time-tick { position: absolute; top: -4px; bottom: -4px; width: 2px; margin-left: -1px; background: var(--text-normal); border-radius: 1px; }
+.dpc-time-of { font-size: 12px; white-space: nowrap; text-align: right; overflow: hidden; text-overflow: ellipsis; }
+.dpc-time-bad { color: var(--color-red); }
+.dpc-time-sess { font-size: 12px; font-family: var(--font-monospace, ui-monospace, monospace); }

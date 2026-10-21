@@ -87,7 +87,7 @@ function parseTask(path, fm, body, cfg) {
   if (!fm || fm["pm-task"] !== true) return null;
   const logs = Array.isArray(fm.timeLogs) ? fm.timeLogs
     .filter(l => l && typeof l.hours === "number" && isFinite(l.hours))
-    .map(l => ({ date: normDate(l.date), hours: l.hours, start: normClock(l.start), end: normClock(l.end) })) : [];
+    .map(l => ({ date: normDate(l.date), hours: l.hours, start: normClock(l.start), end: normClock(l.end), note: typeof l.note === "string" ? l.note : "" })) : [];
   const cf = fm.customFields && typeof fm.customFields === "object" ? fm.customFields : {};
   // Normally keyed by dotpm's field id; if that id differs on this device (dotpm settings not synced),
   // fall back to any custom-field value that is one of the work-type options.
@@ -962,7 +962,85 @@ function setFrontmatterLines(text, fields) {
   return `---${nl}${lines.join(nl)}${nl}---` + text.slice(m[0].length);
 }
 
+// ---------- time spent ----------
+// Where logged time went between `from` and `to` (inclusive), read from every task's time logs.
+// Each log counts on its own date. Logs with a clock range are also placed hour by hour (`hours`, for a
+// single day); logs without one only count in the totals ("untimed"). A range that runs past midnight
+// is cut at midnight. `budget` is estimate × multiplier, the same figure the planner uses.
+// opts: { capacity, capacityDays, defaultWeeklyHours, workWindow, today }
+function logSpan(l) {
+  const e = l.end ? hm(l.end) : null, s0 = l.start ? hm(l.start) : null;
+  if (s0 == null && e == null) return null;
+  let a = s0 != null ? s0 : e - l.hours, b = e != null ? e : s0 + l.hours;
+  if (b <= a) b = 24; // ran past midnight
+  return [Math.max(0, a), Math.min(24, b)];
+}
+function timeReport(tasks, cfg, mults, from, to, opts) {
+  const o = opts || {};
+  const days = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);
+  const byDay = Object.fromEntries(days.map(d => [d, { date: d, total: 0, byType: {}, available: availableOnDay(o.capacity || {}, d, o.defaultWeeklyHours || 0, o.capacityDays) }]));
+  const byType = {}, byProject = {}, rows = [];
+  const bins = {}; // hour -> { type: hours }
+  let total = 0, untimed = 0, minH = 24, maxH = 0;
+  for (const t of tasks) {
+    const k = typeKey(t);
+    let here = 0, before = 0;
+    const sessions = [];
+    for (const l of t.logs || []) {
+      if (!l.date || !(l.hours > 0)) continue;
+      if (l.date < from) { before += l.hours; continue; }
+      if (l.date > to) continue;
+      here += l.hours;
+      sessions.push(l);
+      const day = byDay[l.date];
+      day.total += l.hours; day.byType[k] = (day.byType[k] || 0) + l.hours;
+      const sp = logSpan(l);
+      if (!sp) { untimed += l.hours; continue; }
+      // spread the log's hours over its clock range (hours logged can differ from the range)
+      const scale = l.hours / Math.max(1 / 60, sp[1] - sp[0]);
+      minH = Math.min(minH, Math.floor(sp[0])); maxH = Math.max(maxH, Math.ceil(sp[1]));
+      for (let hr = Math.floor(sp[0]); hr < sp[1]; hr++) {
+        const ov = Math.min(sp[1], hr + 1) - Math.max(sp[0], hr);
+        if (ov <= 0) continue;
+        (bins[hr] = bins[hr] || {})[k] = ((bins[hr] || {})[k] || 0) + ov * scale;
+      }
+    }
+    if (!(here > 0)) continue;
+    total += here;
+    byType[k] = (byType[k] || 0) + here;
+    const pk = t.project || NO_PROJECT;
+    byProject[pk] = (byProject[pk] || 0) + here;
+    const budget = t.estimate > 0 ? t.estimate * multiplierFor(mults, k) : null;
+    sessions.sort((x, y) => (x.date + (x.start || "")).localeCompare(y.date + (y.start || "")));
+    rows.push({ task: t, type: k, here, before, logged: t.logged, budget, over: budget != null && t.logged > budget + 1e-9,
+      done: isComplete(cfg, t.status), sessions });
+  }
+  rows.sort((x, y) => y.here - x.here || x.task.title.localeCompare(y.task.title));
+  // hour axis: the work window, widened to fit any log outside it
+  let hours = null;
+  if (from === to) {
+    const w = (o.workWindow || DEFAULT_WINDOW)[weekdayOf(from) % 6 === 0 ? "weekend" : "weekday"] || DEFAULT_WINDOW.weekday;
+    const a = Math.min(Math.floor(hm(w[0])), minH), b = Math.max(Math.ceil(hm(w[1])), maxH);
+    hours = [];
+    for (let hr = a; hr < b; hr++) hours.push({ hour: hr, byType: bins[hr] || {}, total: Object.values(bins[hr] || {}).reduce((x, y) => x + y, 0) });
+  }
+  const today = o.today || to;
+  const elapsed = days.filter(d => d <= today);
+  const available = days.reduce((a, d) => a + byDay[d].available, 0);
+  return { from, to, days: days.map(d => byDay[d]), hours, untimed, total, byType, byProject, rows, available,
+    elapsed: elapsed.length, average: elapsed.length ? elapsed.reduce((a, d) => a + byDay[d].total, 0) / elapsed.length : 0 };
+}
+// Average hours a day over the days before `date` in its week that have time logged (for "vs your average").
+function weekAverageBefore(tasks, date) {
+  const mon = mondayOf(date), per = {};
+  for (const t of tasks) for (const l of t.logs || []) if (l.date >= mon && l.date < date && l.hours > 0) per[l.date] = (per[l.date] || 0) + l.hours;
+  const v = Object.values(per);
+  return v.length ? { average: v.reduce((a, b) => a + b, 0) / v.length, days: v.length } : null;
+}
+
 module.exports = {
+  timeReport, weekAverageBefore, logSpan,
   bodyOf, setFrontmatterLines, frontmatterOf,
   NO_TYPE, NO_PROJECT, DEFAULT_MULTIPLIER, categoryGroups, DUE_SORT, isDefaultSort,
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,
@@ -1025,7 +1103,7 @@ function typeColor(cfg, k) {
 }
 
 // ---------- shell ----------
-const TABS = [["dotpm", "dotpm"], ["board", "Board"], ["projects", "Projects"], ["capacity", "Capacity"], ["types", "Work types"], ["multipliers", "Multipliers"]];
+const TABS = [["dotpm", "dotpm"], ["board", "Board"], ["projects", "Projects"], ["capacity", "Capacity"], ["types", "Work types"], ["multipliers", "Multipliers"], ["time", "Time"]];
 function render(root, st, on) {
   const doc = root.ownerDocument;
   root.replaceChildren();
@@ -1044,7 +1122,7 @@ function render(root, st, on) {
   if (!st.result) { root.append(h(doc, "p", { class: "dpc-muted" }, "Reading tasks…")); return; }
   const body = h(doc, "div", { class: "dpc-body" });
   root.append(body);
-  ({ board: renderBoard, projects: renderProjects, capacity: renderCapacity, types: renderTypes, multipliers: renderMultipliers }[st.tab] || renderBoard)(body, st, on);
+  ({ board: renderBoard, projects: renderProjects, capacity: renderCapacity, types: renderTypes, multipliers: renderMultipliers, time: renderTime }[st.tab] || renderBoard)(body, st, on);
 }
 
 function taskLink(doc, t, on) {
@@ -1547,6 +1625,190 @@ function legend(doc, cfg, keys, withCap) {
     withCap ? h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), "Available") : null);
 }
 
+// ---------- time ----------
+// Where logged time went on a day or in a week, like a phone's screen-time report. Reads time logs only.
+const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const dowOf = d => DOW[new Date(M.toDay(d) * 86400000).getUTCDay()];
+function fmtDur(hrs) {
+  const m = Math.round(hrs * 60);
+  if (m <= 0) return "0m";
+  const hh = Math.floor(m / 60), mm = m % 60;
+  return (hh ? `${hh}h` : "") + (hh && mm ? " " : "") + (mm ? `${mm}m` : "");
+}
+const clock12 = hr => `${hr % 12 || 12}${hr < 12 || hr === 24 ? "a" : "p"}`;
+function timeState(st) {
+  const t = st.time || {}, today = st.today || M.localToday();
+  const mode = t.mode === "week" ? "week" : "day";
+  let date = M.isDate(t.date) ? t.date : today;
+  if (date > today) date = today;
+  return { mode, date, group: t.group === "project" ? "project" : "type", today };
+}
+function renderTime(body, st, on) {
+  const doc = body.ownerDocument, cfg = st.cfg, mults = st.settings.multipliers || {};
+  const T = timeState(st), today = T.today;
+  const from = T.mode === "day" ? T.date : M.mondayOf(T.date), to = T.mode === "day" ? T.date : M.addDays(from, 6);
+  const R = M.timeReport(st.tasks, cfg, mults, from, to, { capacity: st.settings.capacity || {}, capacityDays: st.settings.capacityDays,
+    defaultWeeklyHours: st.settings.defaultWeeklyHours, workWindow: st.workWindow, today });
+  const set = patch => on.setTime(patch);
+  const step = n => { let d = M.addDays(T.date, n * (T.mode === "day" ? 1 : 7)); if (d > today) d = today; set({ date: d }); };
+  const label = T.mode === "day" ? (T.date === today ? "Today" : T.date === M.addDays(today, -1) ? "Yesterday" : `${dowOf(T.date)} ${fmtD(T.date)}`)
+    : (from === M.mondayOf(today) ? "This week" : `${fmtD(from)} – ${fmtD(to)}`);
+  const atEnd = T.mode === "day" ? T.date >= today : to >= today;
+  const seg = (items, cur, fn, aria) => h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": aria },
+    items.map(([id, name]) => h(doc, "button", { class: "dpc-seg-btn" + (cur === id ? " is-active" : ""), "aria-pressed": cur === id, onclick: () => fn(id) }, name)));
+  body.append(h(doc, "div", { class: "dpc-time-top" },
+    seg([["day", "Day"], ["week", "Week"]], T.mode, m => set({ mode: m }), "Period"),
+    h(doc, "div", { class: "dpc-time-nav" },
+      h(doc, "button", { "aria-label": T.mode === "day" ? "Previous day" : "Previous week", onclick: () => step(-1) }, "‹"),
+      h(doc, "span", { class: "dpc-time-label" }, label),
+      h(doc, "button", { "aria-label": T.mode === "day" ? "Next day" : "Next week", disabled: atEnd, onclick: () => step(1) }, "›"),
+      h(doc, "button", { class: "dpc-small", disabled: T.date === today, onclick: () => set({ date: today }) }, "Today"))));
+
+  // headline
+  let big, sub;
+  if (T.mode === "day") {
+    const avg = M.weekAverageBefore(st.tasks, T.date);
+    big = fmtDur(R.total);
+    sub = avg && avg.average > 0
+      ? `${R.total >= avg.average ? "▲" : "▼"} ${Math.abs(Math.round((R.total / avg.average - 1) * 100))}% vs this week's daily average (${fmtDur(avg.average)})`
+      : "No earlier days logged this week";
+  } else {
+    big = fmtDur(R.average);
+    sub = `${fmtDur(R.total)} over ${R.elapsed} day${R.elapsed === 1 ? "" : "s"}`;
+  }
+  const used = R.available > 0 ? `${Math.round((R.total / R.available) * 100)}%` : "—";
+  body.append(h(doc, "div", { class: "dpc-time-head" },
+    h(doc, "div", {}, h(doc, "div", { class: "dpc-time-k" }, T.mode === "day" ? (T.date === today ? "Worked today" : "Worked") : "Daily average"),
+      h(doc, "div", { class: "dpc-time-big" }, big), h(doc, "div", { class: "dpc-muted dpc-time-sub" }, sub)),
+    h(doc, "div", { class: "dpc-time-stats" },
+      [["Available", fmtH(R.available)], [T.mode === "day" ? "Used" : "Used so far", used], ["Tasks", String(R.rows.length)]]
+        .map(([k, v]) => h(doc, "div", {}, h(doc, "div", { class: "dpc-time-k" }, k), h(doc, "div", { class: "dpc-time-v" }, v))))));
+
+  // chart
+  const wrap = h(doc, "div", { class: "dpc-chart-wrap" }), tip = h(doc, "div", { class: "dpc-tip", role: "status" });
+  const hover = (el, text) => {
+    const show = e => { tip.textContent = text; tip.classList.add("is-on"); const r = el.getBoundingClientRect();
+      placeTip(tip, wrap, e && e.clientX != null ? e.clientX : r.right, e && e.clientY != null ? e.clientY : r.top + r.height / 2); };
+    el.addEventListener("mousemove", show); el.addEventListener("focus", show);
+    el.addEventListener("mouseleave", () => tip.classList.remove("is-on")); el.addEventListener("blur", () => tip.classList.remove("is-on"));
+  };
+  const keys = typeKeys(cfg), present = new Set();
+  const W = Math.max(320, Math.min(760, body.clientWidth || 640)), padL = 38, padR = 8, padT = 12, padB = 24;
+  if (T.mode === "day") {
+    const H = 170, hrs = R.hours, cw = (W - padL - padR) / hrs.length, y = m => padT + (H - padT - padB) * (1 - m / 60);
+    const svg = s(doc, "svg", { class: "dpc-chart", viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": "Minutes worked in each hour" });
+    for (const m of [0, 30, 60]) {
+      svg.append(s(doc, "line", { x1: padL, x2: W - padR, y1: y(m), y2: y(m), class: m === 0 ? "dpc-axis" : "dpc-grid" }));
+      svg.append(s(doc, "text", { x: padL - 6, y: y(m) + 4, class: "dpc-tick", "text-anchor": "end" }, `${m}m`));
+    }
+    hrs.forEach((b, i) => {
+      const x = padL + i * cw + Math.min(3, cw * 0.12), bw = cw - 2 * Math.min(3, cw * 0.12);
+      let acc = 0;
+      for (const k of keys) {
+        const v = (b.byType[k] || 0) * 60;
+        if (v < 0.5) continue;
+        present.add(k);
+        const r = s(doc, "rect", { x, width: bw, y: y(Math.min(60, acc + v)), height: Math.max(0, y(acc) - y(Math.min(60, acc + v))), rx: 2, style: `fill:${typeColor(cfg, k)}`, class: "dpc-seg-mark", tabindex: 0 });
+        hover(r, `${clock12(b.hour)}–${clock12(b.hour + 1)} · ${typeName(k, cfg)}: ${Math.round(v)}m`);
+        svg.append(r); acc += v;
+      }
+      if ((b.hour - hrs[0].hour) % 3 === 0) svg.append(s(doc, "text", { x: padL + i * cw, y: H - 6, class: "dpc-tick" }, clock12(b.hour)));
+    });
+    if (T.date === today && typeof st.nowHours === "number" && st.nowHours > hrs[0].hour && st.nowHours < hrs[hrs.length - 1].hour + 1) {
+      const x = padL + (st.nowHours - hrs[0].hour) * cw;
+      svg.append(s(doc, "line", { x1: x, x2: x, y1: padT, y2: H - padB, class: "dpc-time-now" }));
+      svg.append(s(doc, "text", { x: x + 4, y: padT + 9, class: "dpc-tick dpc-time-now-label" }, "now"));
+    }
+    wrap.append(svg, tip);
+  } else {
+    const H = 200, max = Math.max(1, ...R.days.map(d => Math.max(d.total, d.available)));
+    const stp = niceStep(max), top = Math.ceil(max / stp) * stp, cw = (W - padL - padR) / 7, bw = Math.min(44, cw * 0.6);
+    const y = v => padT + (H - padT - padB) * (1 - v / top);
+    const svg = s(doc, "svg", { class: "dpc-chart", viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": "Hours worked each day of the week" });
+    for (let v = 0; v <= top + 1e-9; v += stp) {
+      svg.append(s(doc, "line", { x1: padL, x2: W - padR, y1: y(v), y2: y(v), class: v === 0 ? "dpc-axis" : "dpc-grid" }));
+      svg.append(s(doc, "text", { x: padL - 6, y: y(v) + 4, class: "dpc-tick", "text-anchor": "end" }, `${Math.round(v * 10) / 10}h`));
+    }
+    R.days.forEach((d, i) => {
+      const x = padL + i * cw + (cw - bw) / 2, future = d.date > today;
+      const g = s(doc, "g", { class: "dpc-time-day" + (future ? " is-future" : ""), tabindex: future ? null : 0, role: future ? null : "button", "aria-label": `${dowOf(d.date)} ${fmtD(d.date)}: ${fmtDur(d.total)}` });
+      if (d.available > 0) g.append(s(doc, "rect", { x, width: bw, y: y(d.available), height: y(0) - y(d.available), rx: 4, class: "dpc-time-avail" }));
+      let acc = 0;
+      for (const k of keys) {
+        const v = d.byType[k] || 0;
+        if (v < 0.01) continue;
+        present.add(k);
+        const r = s(doc, "rect", { x, width: bw, y: y(acc + v), height: Math.max(0, y(acc) - y(acc + v)), rx: 2, style: `fill:${typeColor(cfg, k)}` });
+        hover(r, `${dowOf(d.date)} ${fmtD(d.date)} · ${typeName(k, cfg)}: ${fmtDur(v)} of ${fmtDur(d.total)}`);
+        g.append(r); acc += v;
+      }
+      g.append(s(doc, "text", { x: x + bw / 2, y: H - 6, class: "dpc-tick" + (d.date === today ? " is-current" : ""), "text-anchor": "middle" }, dowOf(d.date)));
+      if (!future) {
+        const go = () => set({ mode: "day", date: d.date });
+        g.addEventListener("click", go); g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+      }
+      svg.append(g);
+    });
+    if (R.elapsed) {
+      svg.append(s(doc, "line", { x1: padL, x2: W - padR, y1: y(R.average), y2: y(R.average), class: "dpc-time-avg" }));
+      svg.append(s(doc, "text", { x: W - padR, y: y(R.average) - 5, class: "dpc-tick dpc-time-avg-label", "text-anchor": "end" }, `avg ${fmtDur(R.average)}`));
+    }
+    wrap.append(svg, tip);
+  }
+  const lg = h(doc, "div", { class: "dpc-legend" }, keys.filter(k => present.has(k)).map(k =>
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k, cfg))),
+    T.mode === "week" ? h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch dpc-time-avail-sw" }), "Available") : null);
+  body.append(wrap, lg);
+  if (T.mode === "day" && R.untimed > 0.01) body.append(h(doc, "p", { class: "dpc-muted dpc-time-note" }, `${fmtDur(R.untimed)} logged without a start and end time is in the total but not on the chart.`));
+  if (T.mode === "week") body.append(h(doc, "p", { class: "dpc-muted dpc-time-note" }, "Click a day to open it."));
+
+  if (!R.rows.length) { body.append(h(doc, "p", { class: "dpc-muted" }, T.mode === "day" ? "No time logged on this day." : "No time logged this week.")); return; }
+
+  // where the time went
+  const projColor = name => (st.projectColors && st.projectColors[name]) || "var(--dpc-none)";
+  const groups = T.group === "type"
+    ? Object.entries(R.byType).map(([k, v]) => ({ name: typeName(k, cfg), v, color: typeColor(cfg, k) }))
+    : Object.entries(R.byProject).map(([k, v]) => ({ name: k === M.NO_PROJECT ? "No project" : k, v, color: projColor(k) }));
+  groups.sort((a, b) => b.v - a.v);
+  body.append(h(doc, "div", { class: "dpc-time-sec" }, h(doc, "h4", { class: "dpc-h" }, "Where the time went"),
+    seg([["type", "Work type"], ["project", "Project"]], T.group, g => set({ group: g }), "Group by")));
+  body.append(h(doc, "div", { class: "dpc-time-groups" }, groups.map(g => h(doc, "div", { class: "dpc-time-group" },
+    h(doc, "span", { class: "dpc-swatch", style: `background:${g.color}` }), h(doc, "span", { class: "dpc-time-gname" }, g.name),
+    h(doc, "span", { class: "dpc-muted dpc-num" }, `${fmtDur(g.v)} · ${Math.round((g.v / R.total) * 100)}%`),
+    h(doc, "div", { class: "dpc-time-gbar" }, h(doc, "div", { style: `width:${(g.v / groups[0].v) * 100}%;background:${g.color}` }))))));
+
+  // time by task
+  body.append(h(doc, "h4", { class: "dpc-h" }, "Time by task"));
+  body.append(h(doc, "div", { class: "dpc-legend" },
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-time-sw" }), T.mode === "day" ? "this day" : "this week"),
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-time-sw is-before" }), "earlier"),
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-time-tick-sw" }), "estimate × multiplier")));
+  const scale = Math.max(1, ...R.rows.map(r => Math.max(r.budget || 0, r.logged)));
+  const pct = v => `${(Math.min(v, scale) / scale) * 100}%`;
+  body.append(h(doc, "div", { class: "dpc-time-rows" }, R.rows.map(r => {
+    const t = r.task, color = typeColor(cfg, r.type), beforeIn = Math.min(r.before, r.budget != null ? r.budget : r.before);
+    const capped = r.budget != null ? Math.min(r.before + r.here, r.budget) : r.before + r.here;
+    const status = r.budget == null ? "no estimate"
+      : r.over ? `over by ${fmtDur(r.logged - r.budget)}` : r.done ? "finished" : `${fmtDur(r.budget - r.logged)} left`;
+    const sess = r.sessions.map(l => (T.mode === "week" ? dowOf(l.date) + " " : "") + (l.start && l.end ? `${l.start}–${l.end}` : fmtDur(l.hours)) + (l.note ? ` ${l.note}` : "")).join("   ");
+    return h(doc, "div", { class: "dpc-time-row" },
+      h(doc, "div", { class: "dpc-time-rtop" },
+        h(doc, "div", { class: "dpc-time-rname" }, taskLink(doc, t, on),
+          h(doc, "div", { class: "dpc-muted dpc-time-meta" }, t.project || "No project", " · ", h(doc, "span", { class: "dpc-swatch", style: `background:${color}` }), typeName(r.type, cfg),
+            t.estimate > 0 ? ` · est ${fmtH(t.estimate)} × ${fmtX(M.multiplierFor(mults, r.type))}` : "")),
+        h(doc, "span", { class: "dpc-time-here dpc-num" }, fmtDur(r.here))),
+      h(doc, "div", { class: "dpc-time-cmp" },
+        h(doc, "div", { class: "dpc-time-track" },
+          h(doc, "div", { class: "dpc-time-fill is-before", style: `left:0;width:${pct(beforeIn)};background:${color}` }),
+          h(doc, "div", { class: "dpc-time-fill", style: `left:${pct(beforeIn)};width:calc(${pct(capped)} - ${pct(beforeIn)});background:${color}` }),
+          r.over ? h(doc, "div", { class: "dpc-time-over", style: `left:${pct(r.budget)};width:calc(${pct(r.logged)} - ${pct(r.budget)})` }) : null,
+          r.budget != null ? h(doc, "div", { class: "dpc-time-tick", style: `left:${pct(r.budget)}`, title: `Estimate × multiplier: ${fmtH(r.budget)}` }) : null),
+        h(doc, "span", { class: "dpc-muted dpc-num dpc-time-of" }, r.budget != null ? `${fmtDur(r.logged)} of ${fmtDur(r.budget)} · ` : `${fmtDur(r.logged)} · `,
+          h(doc, "span", { class: r.over ? "dpc-time-bad" : "" }, status))),
+      sess ? h(doc, "div", { class: "dpc-muted dpc-time-sess" }, sess) : null);
+  })));
+}
+
 // ---------- multipliers ----------
 function renderMultipliers(body, st, on) {
   const doc = body.ownerDocument, cfg = st.cfg, R = st.result, set = st.settings;
@@ -1700,6 +1962,8 @@ const DEFAULTS = {
   pulled: {},
   openOnStartup: true,
   lastMode: "adj",
+  timeMode: "day",
+  timeGroup: "type",
 };
 
 class CompanionView extends ItemView {
@@ -1790,7 +2054,9 @@ class CompanionView extends ItemView {
       tab: this.tab, mode: this.mode, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
       bridged: !!p.dotpm(), showMore: !!this.showMore, openProjects: this.openProjects, projects: Object.values(p.projectNotes).filter(x => !x.archived),
       spill: M.spillover(p.taskList(), p.cfg, M.mondayOf(M.localToday())), projectColors: p.projectColors, dotpmError: this.dotpmError ? String(this.dotpmError.message || this.dotpmError) : null,
-      cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity }, tasks: p.taskList(), result: p.result,
+      cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity, capacityDays: p.capacityDays || {} }, tasks: p.taskList(), result: p.result,
+      time: { mode: p.settings.timeMode, group: p.settings.timeGroup, date: this.timeDate }, today: M.localToday(),
+      nowHours: (() => { const n = new Date(); return n.getHours() + n.getMinutes() / 60; })(), workWindow: p.workWindow || null,
     }, {
       setTab: t => this.switchTab(t),
       mountDotpm: host => this.mountDotpm(host),
@@ -1818,6 +2084,13 @@ class CompanionView extends ItemView {
       toggleMore: () => { this.showMore = !this.showMore; this.refresh(); },
       setMultiplier: (k, v) => p.setMultiplier(k, v),
       createCapacity: () => p.createCapacityFile(),
+      setTime: patch => {
+        if (patch.mode) p.settings.timeMode = patch.mode;
+        if (patch.group) p.settings.timeGroup = patch.group;
+        if (patch.date) this.timeDate = patch.date === M.localToday() ? null : patch.date;
+        if (patch.mode || patch.group) p.saveSettings();
+        this.refresh();
+      },
     });
   }
 }
@@ -1843,6 +2116,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.addCommand({ id: "open-dotpm", name: "Open dotpm tab", callback: () => this.activateView("dotpm") });
     this.addCommand({ id: "open-today", name: "Open today's queue", callback: () => { this.settings.boardMode = "today"; this.activateView("board"); } });
     this.addCommand({ id: "create-capacity", name: "Create capacity file", callback: () => this.createCapacityFile() });
+    this.addCommand({ id: "open-time", name: "Open time spent", callback: () => this.activateView("time") });
     this.addCommand({ id: "open-projects", name: "Open project progress", callback: () => this.activateView("projects") });
     this.addCommand({ id: "quick-add", name: "Quick add task", callback: () => new QuickAddModal(this).open() });
     this.addCommand({ id: "quick-capacity", name: "Quick capacity (change a day's hours)", callback: () => new QuickCapacityModal(this).open() });

@@ -373,3 +373,47 @@ test("current week compares its work with the hours still ahead, not the whole w
   w = R.weeks.find(x => x.week === "2026-W43");
   assert.ok(Math.abs(w.available - 61.01) < 1e-9, String(w.available));
 });
+
+test("time report: per day, per hour, per type and project, budget comparison", () => {
+  const mk = (title, project, workType, estimate, status, logs) => ({ title, project, workType, estimate, status, logs, logged: logs.reduce((a, l) => a + l.hours, 0) });
+  const L = (date, start, end, hours) => ({ date, start, end, hours: hours != null ? hours : (M.normClock(end) && (Number(end.slice(0, 2)) + Number(end.slice(3)) / 60) - (Number(start.slice(0, 2)) + Number(start.slice(3)) / 60)), note: "" });
+  const ts = [
+    mk("CAD part", "Toaster", "CAD", 6, "in-progress", [L("2026-10-16", "13:00", "16:00"), L("2026-10-21", "09:30", "11:30")]),
+    mk("Print", "Course A", "Fabrication", 0.5, "done", [L("2026-10-21", "15:15", "16:30")]),
+    mk("Notes", "Toaster", "Writing", null, "todo", [{ date: "2026-10-21", start: null, end: null, hours: 0.5, note: "" }]),
+    mk("Late", "Fun", null, 1, "todo", [L("2026-10-20", "23:30", "00:30", 1)]),
+  ];
+  const mults = { CAD: 2, Fabrication: 2, Writing: 2 };
+  const day = M.timeReport(ts, cfg, mults, "2026-10-21", "2026-10-21", { capacityDays: { "2026-10-21": 9.5 }, today: "2026-10-21" });
+  assert.equal(day.total, 3.75);
+  assert.equal(day.untimed, 0.5);
+  assert.equal(day.available, 9.5);
+  assert.deepEqual(day.byProject, { Toaster: 2.5, "Course A": 1.25 });
+  assert.equal(day.hours[0].hour, 9);
+  const h9 = day.hours.find(b => b.hour === 9), h15 = day.hours.find(b => b.hour === 15), h16 = day.hours.find(b => b.hour === 16);
+  assert.equal(h9.byType.CAD, 0.5); assert.equal(h15.byType.Fabrication, 0.75); assert.equal(h16.byType.Fabrication, 0.5);
+  const cad = day.rows.find(r => r.task.title === "CAD part");
+  assert.equal(cad.here, 2); assert.equal(cad.before, 3); assert.equal(cad.budget, 12); assert.equal(cad.over, false);
+  const pr = day.rows.find(r => r.task.title === "Print");
+  assert.equal(pr.budget, 1); assert.equal(pr.over, true); assert.equal(pr.done, true);
+  assert.equal(day.rows[0].task.title, "CAD part"); // sorted by time here
+  assert.equal(day.rows.find(r => r.task.title === "Notes").budget, null);
+  // run past midnight is cut at midnight on its own date
+  const tue = M.timeReport(ts, cfg, mults, "2026-10-20", "2026-10-20", {});
+  assert.equal(tue.total, 1);
+  assert.equal(tue.hours[tue.hours.length - 1].hour, 23);
+  // week: only days up to today count toward the average
+  const wk = M.timeReport(ts, cfg, mults, "2026-10-19", "2026-10-25", { today: "2026-10-21" });
+  assert.equal(wk.days.length, 7); assert.equal(wk.hours, null);
+  assert.equal(wk.total, 4.75); assert.equal(wk.elapsed, 3);
+  assert.ok(Math.abs(wk.average - 4.75 / 3) < 1e-9);
+  assert.equal(wk.days[2].total, 3.75); assert.equal(wk.days[1].byType[M.NO_TYPE], 1);
+  // average of earlier logged days in the week
+  assert.deepEqual(M.weekAverageBefore(ts, "2026-10-21"), { average: 1, days: 1 });
+  assert.equal(M.weekAverageBefore(ts, "2026-10-19"), null);
+});
+
+test("time logs keep their note", () => {
+  const t = M.parseTask("a.md", { "pm-task": true, title: "x", timeLogs: [{ date: "2026-10-21", hours: 1, note: "lid", start: "09:00", end: "10:00" }] }, "", cfg);
+  assert.deepEqual(t.logs[0], { date: "2026-10-21", hours: 1, start: "09:00", end: "10:00", note: "lid" });
+});

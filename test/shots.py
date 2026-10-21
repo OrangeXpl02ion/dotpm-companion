@@ -1,7 +1,22 @@
 import asyncio, sys
 from playwright.async_api import async_playwright
 OUT=sys.argv[1]
+
+def L(d,a,b,note=""):
+  ha=int(a[:2])+int(a[3:])/60; hb=int(b[:2])+int(b[3:])/60
+  return dict(date=d,start=a,end=b,hours=round(hb-ha,4),note=note)
+def T(title,*logs): return [title,dict(logs=list(logs),logged=sum(l["hours"] for l in logs))]
+TIME_MUT=[T("Toaster CAD assembly",L("2026-10-16","13:00","16:00"),L("2026-10-19","14:00","16:30"),L("2026-10-21","09:30","11:30","lid hinge")),
+ T("Lantern form exploration and mockups",L("2026-10-20","13:00","16:00"),L("2026-10-21","12:30","14:00")),
+ T("Typeface pairing",L("2026-10-20","20:00","21:30"),L("2026-10-21","14:15","15:15")),
+ T("Toaster 3D print",L("2026-10-21","15:15","16:30")),
+ T("Inhaler material audit",L("2026-10-19","10:00","12:00"),L("2026-10-17","10:30","12:00")),
+ T("About bio",L("2026-10-19","19:00","20:00"))]
 cases=[
+ ("time_day",dict(tab="time",today="2026-10-21",nowHours=16.6,mutate=TIME_MUT,settings=dict(capacityDays={"2026-10-21":9.5}))),
+ ("time_day_dark",dict(tab="time",dark=True,today="2026-10-21",nowHours=16.6,mutate=TIME_MUT)),
+ ("time_week",dict(tab="time",today="2026-10-21",time=dict(mode="week",group="project"),mutate=TIME_MUT,settings=dict(capacityDays={"2026-10-19":9,"2026-10-20":6,"2026-10-21":9.5,"2026-10-22":8.5,"2026-10-23":10,"2026-10-24":9,"2026-10-25":9}))),
+
  ("capacity_light",dict(tab="capacity",expanded="2026-W45")),
  ("capacity_dark",dict(tab="capacity",dark=True)),
  ("queue_light",dict(tab="queue",showMore=True)),

@@ -83,7 +83,7 @@ function parseTask(path, fm, body, cfg) {
   if (!fm || fm["pm-task"] !== true) return null;
   const logs = Array.isArray(fm.timeLogs) ? fm.timeLogs
     .filter(l => l && typeof l.hours === "number" && isFinite(l.hours))
-    .map(l => ({ date: normDate(l.date), hours: l.hours, start: normClock(l.start), end: normClock(l.end) })) : [];
+    .map(l => ({ date: normDate(l.date), hours: l.hours, start: normClock(l.start), end: normClock(l.end), note: typeof l.note === "string" ? l.note : "" })) : [];
   const cf = fm.customFields && typeof fm.customFields === "object" ? fm.customFields : {};
   // Normally keyed by dotpm's field id; if that id differs on this device (dotpm settings not synced),
   // fall back to any custom-field value that is one of the work-type options.
@@ -958,7 +958,85 @@ function setFrontmatterLines(text, fields) {
   return `---${nl}${lines.join(nl)}${nl}---` + text.slice(m[0].length);
 }
 
+// ---------- time spent ----------
+// Where logged time went between `from` and `to` (inclusive), read from every task's time logs.
+// Each log counts on its own date. Logs with a clock range are also placed hour by hour (`hours`, for a
+// single day); logs without one only count in the totals ("untimed"). A range that runs past midnight
+// is cut at midnight. `budget` is estimate × multiplier, the same figure the planner uses.
+// opts: { capacity, capacityDays, defaultWeeklyHours, workWindow, today }
+function logSpan(l) {
+  const e = l.end ? hm(l.end) : null, s0 = l.start ? hm(l.start) : null;
+  if (s0 == null && e == null) return null;
+  let a = s0 != null ? s0 : e - l.hours, b = e != null ? e : s0 + l.hours;
+  if (b <= a) b = 24; // ran past midnight
+  return [Math.max(0, a), Math.min(24, b)];
+}
+function timeReport(tasks, cfg, mults, from, to, opts) {
+  const o = opts || {};
+  const days = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);
+  const byDay = Object.fromEntries(days.map(d => [d, { date: d, total: 0, byType: {}, available: availableOnDay(o.capacity || {}, d, o.defaultWeeklyHours || 0, o.capacityDays) }]));
+  const byType = {}, byProject = {}, rows = [];
+  const bins = {}; // hour -> { type: hours }
+  let total = 0, untimed = 0, minH = 24, maxH = 0;
+  for (const t of tasks) {
+    const k = typeKey(t);
+    let here = 0, before = 0;
+    const sessions = [];
+    for (const l of t.logs || []) {
+      if (!l.date || !(l.hours > 0)) continue;
+      if (l.date < from) { before += l.hours; continue; }
+      if (l.date > to) continue;
+      here += l.hours;
+      sessions.push(l);
+      const day = byDay[l.date];
+      day.total += l.hours; day.byType[k] = (day.byType[k] || 0) + l.hours;
+      const sp = logSpan(l);
+      if (!sp) { untimed += l.hours; continue; }
+      // spread the log's hours over its clock range (hours logged can differ from the range)
+      const scale = l.hours / Math.max(1 / 60, sp[1] - sp[0]);
+      minH = Math.min(minH, Math.floor(sp[0])); maxH = Math.max(maxH, Math.ceil(sp[1]));
+      for (let hr = Math.floor(sp[0]); hr < sp[1]; hr++) {
+        const ov = Math.min(sp[1], hr + 1) - Math.max(sp[0], hr);
+        if (ov <= 0) continue;
+        (bins[hr] = bins[hr] || {})[k] = ((bins[hr] || {})[k] || 0) + ov * scale;
+      }
+    }
+    if (!(here > 0)) continue;
+    total += here;
+    byType[k] = (byType[k] || 0) + here;
+    const pk = t.project || NO_PROJECT;
+    byProject[pk] = (byProject[pk] || 0) + here;
+    const budget = t.estimate > 0 ? t.estimate * multiplierFor(mults, k) : null;
+    sessions.sort((x, y) => (x.date + (x.start || "")).localeCompare(y.date + (y.start || "")));
+    rows.push({ task: t, type: k, here, before, logged: t.logged, budget, over: budget != null && t.logged > budget + 1e-9,
+      done: isComplete(cfg, t.status), sessions });
+  }
+  rows.sort((x, y) => y.here - x.here || x.task.title.localeCompare(y.task.title));
+  // hour axis: the work window, widened to fit any log outside it
+  let hours = null;
+  if (from === to) {
+    const w = (o.workWindow || DEFAULT_WINDOW)[weekdayOf(from) % 6 === 0 ? "weekend" : "weekday"] || DEFAULT_WINDOW.weekday;
+    const a = Math.min(Math.floor(hm(w[0])), minH), b = Math.max(Math.ceil(hm(w[1])), maxH);
+    hours = [];
+    for (let hr = a; hr < b; hr++) hours.push({ hour: hr, byType: bins[hr] || {}, total: Object.values(bins[hr] || {}).reduce((x, y) => x + y, 0) });
+  }
+  const today = o.today || to;
+  const elapsed = days.filter(d => d <= today);
+  const available = days.reduce((a, d) => a + byDay[d].available, 0);
+  return { from, to, days: days.map(d => byDay[d]), hours, untimed, total, byType, byProject, rows, available,
+    elapsed: elapsed.length, average: elapsed.length ? elapsed.reduce((a, d) => a + byDay[d].total, 0) / elapsed.length : 0 };
+}
+// Average hours a day over the days before `date` in its week that have time logged (for "vs your average").
+function weekAverageBefore(tasks, date) {
+  const mon = mondayOf(date), per = {};
+  for (const t of tasks) for (const l of t.logs || []) if (l.date >= mon && l.date < date && l.hours > 0) per[l.date] = (per[l.date] || 0) + l.hours;
+  const v = Object.values(per);
+  return v.length ? { average: v.reduce((a, b) => a + b, 0) / v.length, days: v.length } : null;
+}
+
 module.exports = {
+  timeReport, weekAverageBefore, logSpan,
   bodyOf, setFrontmatterLines, frontmatterOf,
   NO_TYPE, NO_PROJECT, DEFAULT_MULTIPLIER, categoryGroups, DUE_SORT, isDefaultSort,
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,
