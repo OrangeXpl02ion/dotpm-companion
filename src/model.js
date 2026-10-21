@@ -332,10 +332,15 @@ function compute(tasks, cfg, settings, today) {
   }
   const threshold = (settings.overloadPct || 85) / 100;
   for (const w of weeks) {
-    w.pct = w.available > 0 ? w.adj / w.available : (w.adj > 0 ? Infinity : 0);
-    w.overloaded = w.pct >= threshold;
     w.isCurrent = today >= w.start && today <= w.end;
     w.isPast = w.end < today;
+    // The spread puts all of this week's remaining work on today…Sunday, so compare it with the hours
+    // still ahead (the rest of today, then whole days), not the whole week's total. weekAvailable keeps
+    // the full figure from the capacity file for display.
+    w.weekAvailable = w.available;
+    if (w.isCurrent) w.available = hoursUntil(settings, today, w.end);
+    w.pct = w.available > 0 ? w.adj / w.available : (w.adj > 0 ? Infinity : 0);
+    w.overloaded = w.pct >= threshold;
     w.tasks.sort((a, b) => b.adj - a.adj);
   }
   // At risk: adjusted remaining hours exceed the hours available between today and the due date.

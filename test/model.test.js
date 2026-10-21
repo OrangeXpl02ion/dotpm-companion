@@ -348,3 +348,28 @@ test("urgency tiers and inheritance", () => {
   assert.ok(Math.abs(u("f.md").slack - (30 - 16 - 2)) < 1e-9, "dependent's slack counts the blocker's hours");
   assert.equal(u("e.md").slack, u("f.md").slack);
 });
+
+test("current week compares its work with the hours still ahead, not the whole week", () => {
+  // Week of Oct 19: 61 h in the capacity file; Mon 9, Tue 4.67 already gone on Wed Oct 21.
+  const days = { "2026-10-19": 9, "2026-10-20": 4.67, "2026-10-21": 9, "2026-10-22": 9.67, "2026-10-23": 9, "2026-10-24": 10, "2026-10-25": 9.67 };
+  const S = { ...settings, capacity: { "2026-W43": 61, "2026-W44": 58.5 }, capacityDays: days, multipliers: { CAD: 2 } };
+  const t = { path: "a", title: "a", status: "todo", priority: "high", start: "2026-10-19", due: "2026-10-25", estimate: 10, logged: 0, workType: "CAD", logs: [] };
+  // Morning (no time given): the whole of today counts → Wed…Sun = 47.34 h.
+  let R = M.compute([t], cfg, S, "2026-10-21");
+  let w = R.weeks.find(x => x.week === "2026-W43");
+  assert.ok(w.isCurrent);
+  assert.equal(w.weekAvailable, 61);
+  assert.ok(Math.abs(w.available - 47.34) < 1e-9, String(w.available));
+  assert.ok(Math.abs(w.pct - 20 / 47.34) < 1e-9);
+  // 4 pm on a 09:00–23:00 day: half of today's 9 h is left → 4.5 + 38.34 = 42.84 h.
+  R = M.compute([t], cfg, { ...S, nowHours: 16, workWindow: { weekday: ["09:00", "23:00"], weekend: ["10:00", "22:00"] } }, "2026-10-21");
+  w = R.weeks.find(x => x.week === "2026-W43");
+  assert.ok(Math.abs(w.available - 42.84) < 1e-9, String(w.available));
+  // Future weeks keep the capacity file's figure.
+  const next = R.weeks.find(x => x.week === "2026-W44");
+  assert.equal(next.available, 58.5); assert.equal(next.weekAvailable, 58.5);
+  // On Monday morning the current week is the full week again.
+  R = M.compute([t], cfg, S, "2026-10-19");
+  w = R.weeks.find(x => x.week === "2026-W43");
+  assert.ok(Math.abs(w.available - 61.01) < 1e-9, String(w.available));
+});

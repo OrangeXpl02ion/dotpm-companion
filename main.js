@@ -336,10 +336,15 @@ function compute(tasks, cfg, settings, today) {
   }
   const threshold = (settings.overloadPct || 85) / 100;
   for (const w of weeks) {
-    w.pct = w.available > 0 ? w.adj / w.available : (w.adj > 0 ? Infinity : 0);
-    w.overloaded = w.pct >= threshold;
     w.isCurrent = today >= w.start && today <= w.end;
     w.isPast = w.end < today;
+    // The spread puts all of this week's remaining work on today…Sunday, so compare it with the hours
+    // still ahead (the rest of today, then whole days), not the whole week's total. weekAvailable keeps
+    // the full figure from the capacity file for display.
+    w.weekAvailable = w.available;
+    if (w.isCurrent) w.available = hoursUntil(settings, today, w.end);
+    w.pct = w.available > 0 ? w.adj / w.available : (w.adj > 0 ? Infinity : 0);
+    w.overloaded = w.pct >= threshold;
     w.tasks.sort((a, b) => b.adj - a.adj);
   }
   // At risk: adjusted remaining hours exceed the hours available between today and the due date.
@@ -1083,7 +1088,7 @@ function renderCapacity(body, st, on) {
   const riskCount = Object.keys(R.risk).length;
   const over = R.weeks.filter(w => w.overloaded && !w.isPast).length;
   body.append(h(doc, "div", { class: "dpc-tiles" },
-    tile(doc, "This week", cur ? `${fmtH(cur.adj)} of ${fmtH(cur.available)}` : "—", cur ? `${Math.round(cur.pct * 100)}% committed · ${fmtH(cur.raw)} raw` : "outside the planning range"),
+    tile(doc, "This week", cur ? `${fmtH(cur.adj)} of ${fmtH(cur.available)} left` : "—", cur ? `${Math.round(cur.pct * 100)}% committed · week total ${fmtH(cur.weekAvailable)}` : "outside the planning range"),
     tile(doc, "Overloaded weeks", String(over), `at ${st.settings.overloadPct}% or more`),
     tile(doc, "At risk", String(riskCount), riskCount ? "see the list below" : "nothing at risk")));
 
@@ -1109,7 +1114,9 @@ function renderCapacity(body, st, on) {
       h(doc, "td", { class: "dpc-muted" }, `${fmtD(w.start)} – ${fmtD(w.end)}`),
       h(doc, "td", { class: "dpc-num dpc-muted" }, fmtH(w.raw)),
       h(doc, "td", { class: "dpc-num" }, fmtH(w.adj)),
-      h(doc, "td", { class: "dpc-num" + (w.fromFile ? "" : " dpc-muted"), title: w.fromFile ? `From ${st.settings.capacityFile}` : "Default (not in the capacity file)" }, fmtH(w.available)),
+      h(doc, "td", { class: "dpc-num" + (w.fromFile ? "" : " dpc-muted"),
+        title: (w.isCurrent ? `Hours left this week (rest of today, then whole days) of ${fmtH(w.weekAvailable)} for the week. ` : "") +
+          (w.fromFile ? `From ${st.settings.capacityFile}` : "Default (not in the capacity file)") }, fmtH(w.available) + (w.isCurrent ? " left" : "")),
       h(doc, "td", { class: "dpc-load" },
         h(doc, "div", { class: "dpc-meter", role: "img", "aria-label": `${Math.round(pct * 100)}% committed` },
           h(doc, "div", { class: "dpc-meter-fill", style: `width:${Math.min(100, pct * 100)}%` }),
