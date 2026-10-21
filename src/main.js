@@ -169,6 +169,8 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.projectColors = {};
     this.projectNotes = {};
     this.capacity = {};
+    this.capacityDays = {};
+    this.ticks = 0;
     this.result = null;
     this.pendingProgress = new Map();
     this.diag = { fromFile: 0, dotpmConfig: "not read yet", lastIndex: null, files: 0 };
@@ -216,6 +218,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
       }));
       this.registerInterval(window.setInterval(() => {
         if (this.result && this.result.today !== M.localToday()) { this.settings.undo = {}; this.settings.pulled = {}; this.saveSettings(); this.recompute(); this.writeSpillover(false); }
+        else if (++this.ticks % 15 === 0) this.recompute(); // today's hours left shrink as the day goes on
       }, 60 * 1000));
       if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("dotpm");
     });
@@ -282,10 +285,14 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   }
   async loadCapacity() {
     const f = this.app.vault.getAbstractFileByPath(normalizePath(this.settings.capacityFile));
-    this.capacity = f instanceof TFile ? M.parseCapacity(await this.app.vault.cachedRead(f)) : {};
+    const md = f instanceof TFile ? await this.app.vault.cachedRead(f) : null;
+    this.capacity = md ? M.parseCapacity(md) : {};
+    this.capacityDays = md ? M.parseCapacityDays(md) : {};
+    const rules = await this.readRules();
+    this.workWindow = rules && !rules.__error && rules.window ? rules.window : null;
   }
   async onChanged(file, data) {
-    if (file.path === normalizePath(this.settings.capacityFile)) { this.capacity = M.parseCapacity(data); this.scheduleRecompute(); return; }
+    if (file.path === normalizePath(this.settings.capacityFile)) { this.capacity = M.parseCapacity(data); this.capacityDays = M.parseCapacityDays(data); this.scheduleRecompute(); return; }
     if (!this.inProjects(file.path)) return;
     const t = await this.indexFile(file, data);
     this.scheduleRecompute();
@@ -298,7 +305,9 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const today = M.localToday();
     // work types still on tasks but no longer in dotpm's list (e.g. a renamed option) stay visible
     this.cfg.extraTypes = [...new Set(this.taskList().map(t => t.workType).filter(w => w && !this.cfg.workTypes.includes(w)))].sort();
-    this.result = M.compute(this.taskList(), this.cfg, { ...this.settings, capacity: this.capacity }, today);
+    const now = new Date();
+    this.result = M.compute(this.taskList(), this.cfg, { ...this.settings, capacity: this.capacity, capacityDays: this.capacityDays || {},
+      workWindow: this.workWindow || null, nowHours: now.getHours() + now.getMinutes() / 60 }, today);
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) if (leaf.view instanceof CompanionView) leaf.view.refresh();
   }
 

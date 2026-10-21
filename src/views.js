@@ -82,6 +82,7 @@ function urgencyChip(doc, u, compact) {
   const tip = u.slack == null ? "No due date" : `${fmtH(u.need)} left with multiplier; ${fmtH(u.need + u.slack)} available before it's due`;
   return h(doc, "span", { class: `dpc-urg dpc-urg-${u.label}`, title: tip }, name ? h(doc, "strong", {}, name) : null, name ? " · " : null, u.reason);
 }
+function byUrgency(st) { return M.urgencyOrder(st.cfg, st.settings.multipliers || {}, (st.result && st.result.urgency) || {}); }
 function overBadge(doc, over) {
   return over ? h(doc, "span", { class: "dpc-badge dpc-badge-over", title: "Logged time has reached estimate × multiplier. Re-estimate what's left." }, h(doc, "span", { class: "dpc-badge-icon", "aria-hidden": "true" }, "+"), "Over budget") : null;
 }
@@ -151,7 +152,7 @@ function renderCapacity(body, st, on) {
   table.append(tb);
   body.append(table);
 
-  const risky = st.tasks.filter(t => R.risk[t.path]).sort((a, b) => (a.due || "").localeCompare(b.due || ""));
+  const risky = st.tasks.filter(t => R.risk[t.path]).sort(byUrgency(st));
   body.append(h(doc, "h4", { class: "dpc-h" }, "At risk"));
   body.append(risky.length ? h(doc, "ul", { class: "dpc-list" }, risky.map(t => {
     const r = R.risk[t.path];
@@ -215,10 +216,10 @@ function renderQueue(body, st, on) {
   renderDoneToday(body, st, on);
   renderMore(body, st, on, false);
   if (R.upcoming) {
-    const later = st.tasks.filter(t => !M.isComplete(st.cfg, t.status) && t.start && t.start > R.today).sort((a, b) => a.start.localeCompare(b.start) || M.priorityRank(st.cfg, a.priority) - M.priorityRank(st.cfg, b.priority));
+    const later = st.tasks.filter(t => !M.isComplete(st.cfg, t.status) && t.start && t.start > R.today).sort(byUrgency(st));
     body.append(h(doc, "details", { class: "dpc-details" }, h(doc, "summary", {}, `Starting later (${later.length})`),
       h(doc, "ul", { class: "dpc-list" }, later.map(t => h(doc, "li", {}, h(doc, "span", { class: "dpc-muted dpc-nowrap dpc-start" }, `starts ${fmtD(t.start)}`), taskLink(doc, t, on),
-        h(doc, "span", { class: "dpc-muted" }, ` · ${t.project}`), riskBadge(doc, R.risk[t.path]))))));
+        h(doc, "span", { class: "dpc-muted" }, ` · ${t.project} · `), urgencyChip(doc, R.urgency && R.urgency[t.path], false), " ", riskBadge(doc, R.risk[t.path]))))));
   }
 }
 
@@ -261,10 +262,11 @@ function renderMore(body, st, on, open) {
   if (!show) return;
   const list = R.candidates.slice(0, 6);
   if (!list.length) { body.append(h(doc, "p", { class: "dpc-muted" }, "No task is ready to pull forward: everything left is waiting on another task.")); return; }
-  body.append(h(doc, "p", { class: "dpc-muted dpc-sub" }, "Ready to start: dependencies done, best priority first. “Start now” moves the start date to today."));
+  body.append(h(doc, "p", { class: "dpc-muted dpc-sub" }, "Ready to start: dependencies done, least slack first. “Start now” moves the start date to today."));
   body.append(h(doc, "ul", { class: "dpc-list dpc-more-list" }, list.map(t =>
     h(doc, "li", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority)), taskLink(doc, t, on),
-      h(doc, "span", { class: "dpc-muted" }, ` · ${t.project} · starts ${fmtD(t.start)}${t.estimate ? ` · ${fmtH(M.adjusted(t, st.settings.multipliers))}` : ""}`),
+      h(doc, "span", { class: "dpc-muted" }, ` · ${t.project} · starts ${fmtD(t.start)}${t.estimate ? ` · ${fmtH(M.adjusted(t, st.settings.multipliers))}` : ""} · `),
+      urgencyChip(doc, R.urgency && R.urgency[t.path], false),
       h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.startNow(t.path) }, "Start now")))));
 }
 
@@ -317,7 +319,8 @@ function projectCard(doc, s, depth, st, on) {
   if (!s.total) return h(doc, "section", { class: "dpc-pcard is-empty", style: `--dpc-depth:${depth}`, "aria-label": n.title }, head);
   const card = h(doc, "section", { class: "dpc-pcard", style: `--dpc-depth:${depth}`, "aria-label": n.title }, head, grid, bar, ms, desc, toggle);
   if (open) {
-    const tasks = s.own.slice().sort((a, b) => (M.isComplete(cfg, a.status) - M.isComplete(cfg, b.status)) || (a.due || "9999").localeCompare(b.due || "9999") || M.priorityRank(cfg, a.priority) - M.priorityRank(cfg, b.priority));
+    const urgOrd = byUrgency(st);
+    const tasks = s.own.slice().sort((a, b) => (M.isComplete(cfg, a.status) - M.isComplete(cfg, b.status)) || (M.isComplete(cfg, a.status) ? (a.due || "9999").localeCompare(b.due || "9999") : urgOrd(a, b)));
     card.append(tasks.length ? h(doc, "ul", { class: "dpc-ptasks" }, tasks.map(t => {
       const stc = cfg.statuses.find(x => x.id === t.status);
       const done = M.isComplete(cfg, t.status), prog = done ? 100 : Math.max(0, Math.min(100, t.progress || 0));
@@ -342,7 +345,7 @@ function renderBoard(body, st, on) {
     h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board view" }, [["today", "Today"], ["week", "By week"]].map(([id, name]) =>
       h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
     h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates."
-      : "Started tasks, most urgent first (Now, Tight, then priority). Finish them here or pull in more."),
+      : "Started tasks, most urgent first: Now, Tight, then least slack. Finish them here or pull in more."),
     h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.quickAdd(), title: "Quick add a task (command: Quick add task)" }, "+ Quick add")));
   if (mode === "today") { renderQueue(body, st, on); return; }
   const cols = R.board.map(c => ({ ...c, color: c.key === "overdue" ? "var(--dpc-risk)" : c.week && c.week.overloaded ? "var(--dpc-over)" : c.week && c.week.isCurrent ? "var(--interactive-accent, var(--text-accent))" : "var(--text-faint)" }));
@@ -389,7 +392,7 @@ function card(doc, t, st, on, mode, targets) {
   el.append(...[
     h(doc, "div", { class: "dpc-card-head" }, h(doc, "span", { class: "dpc-card-title" }, t.title),
       t.type === "milestone" ? h(doc, "span", { class: "dpc-ms", title: "Milestone" }, "M") : null),
-    !done ? urgencyChip(doc, R.urgency && R.urgency[t.path], true) : null,
+    !done ? urgencyChip(doc, R.urgency && R.urgency[t.path], false) : null,
     hrs || R.risk[t.path] ? h(doc, "div", { class: "dpc-card-meta" }, hrs ? h(doc, "span", { class: "dpc-hrs" }, hrs) : null,
       !done && M.remaining(t) > 0 && st.settings.multipliers ? h(doc, "span", { class: "dpc-muted", title: "Hours left with multiplier" }, `${fmtH(M.adjusted(t, st.settings.multipliers))} ×`) : null,
       riskBadge(doc, R.risk[t.path]), !done ? overBadge(doc, R.over && R.over.has(t.path)) : null) : null,

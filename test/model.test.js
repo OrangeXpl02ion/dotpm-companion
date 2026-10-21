@@ -167,7 +167,8 @@ test("dependencies, ready tasks and candidates", () => {
   assert.ok(R.blocked.has(k.path), "web page waits on unfinished tasks");
   assert.ok(R.candidates.length > 0);
   for (const c of R.candidates) assert.ok(!R.blocked.has(c.path) && c.start > today);
-  for (let i = 1; i < R.candidates.length; i++) assert.ok(M.priorityRank(cfg, R.candidates[i - 1].priority) <= M.priorityRank(cfg, R.candidates[i].priority));
+  const order = M.urgencyOrder(cfg, settings.multipliers || {}, R.urgency);
+  for (let i = 1; i < R.candidates.length; i++) assert.ok(order(R.candidates[i - 1], R.candidates[i]) <= 0, "same order as the queue");
 });
 
 test("done today and measured series", () => {
@@ -275,6 +276,18 @@ test("per-project load adds up to the week and groups by top-level project", () 
 
 const S0 = () => settings.multipliers || {};
 
+test("capacity per day: Days table, and only what's left of today", () => {
+  const S = { capacity: { "2026-W43": 64 }, capacityDays: { "2026-10-20": 6, "2026-10-21": 9.5 }, defaultWeeklyHours: 40 };
+  assert.equal(M.availableOnDay(S.capacity, "2026-10-21", 40, S.capacityDays), 9.5, "Days table wins");
+  assert.ok(Math.abs(M.availableOnDay(S.capacity, "2026-10-22", 40, S.capacityDays) - 64 / 7) < 1e-9, "falls back to a seventh of the week");
+  assert.equal(M.dayLeftShare("2026-10-20", 20, null), 3 / 14, "Tue 8 pm: 3 of 14 window hours left");
+  assert.equal(M.dayLeftShare("2026-10-24", 21, null), 1 / 12, "Sat 9 pm: weekend window 10–22");
+  assert.equal(M.dayLeftShare("2026-10-20", 23.5, null), 0);
+  assert.equal(M.dayLeftShare("2026-10-20", 8, null), 1);
+  assert.equal(M.dayLeftShare("2026-10-20", undefined, null), 1, "no time → whole day");
+  assert.ok(Math.abs(M.hoursUntil({ ...S, nowHours: 20 }, "2026-10-20", "2026-10-21") - (6 * 3 / 14 + 9.5)) < 1e-9);
+});
+
 test("hours left: estimate × multiplier − logged", () => {
   const t = { estimate: 5, logged: 4, workType: "CAD" };
   assert.equal(M.remaining(t), 1);
@@ -305,6 +318,10 @@ test("urgency tiers and inheritance", () => {
   assert.equal(u("d.md").label, "now"); assert.match(u("d.md").reason, /^Short/);
   assert.equal(u("e.md").label, "tight", "takes the tier of the task waiting on it");
   assert.match(u("e.md").reason, /Unblocks needs blocker/);
-  assert.equal(R.queue[0].title, "medium tomorrow", "due tomorrow beats a high-priority task due next month");
+  assert.equal(R.queue[0].title, "short", "least slack first within Now");
+  assert.equal(R.queue[1].title, "medium tomorrow", "due tomorrow beats a high-priority task due next month");
   assert.equal(R.queue.at(-1).title, "high far");
+  // the blocker shares the slack of what waits on it, minus its own hours
+  assert.ok(Math.abs(u("f.md").slack - (30 - 16 - 2)) < 1e-9, "dependent's slack counts the blocker's hours");
+  assert.equal(u("e.md").slack, u("f.md").slack);
 });

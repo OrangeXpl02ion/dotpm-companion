@@ -261,9 +261,29 @@ function weeksInRange(rangeStart, rangeEnd) {
   for (let m = mondayOf(rangeStart); m <= rangeEnd; m = addDays(m, 7)) out.push({ week: isoWeek(m), start: m, end: addDays(m, 6) });
   return out;
 }
-function availableOnDay(cap, date, fallbackWeekly) {
+// A day's hours: the Days table in Capacity.md when it has the day, else a seventh of the week.
+function availableOnDay(cap, date, fallbackWeekly, days) {
+  if (days && typeof days[date] === "number") return days[date];
   const w = isoWeek(date);
   return (w in cap ? cap[w] : fallbackWeekly) / 7;
+}
+// Share of today's work window still ahead at `nowH` (hours after midnight, e.g. 20.5). Window from the
+// capacity rules (weekday 09:00–23:00, weekend 10:00–22:00 by default). No time given → the whole day.
+const DEFAULT_WINDOW = { weekday: ["09:00", "23:00"], weekend: ["10:00", "22:00"] };
+function dayLeftShare(date, nowH, window) {
+  if (typeof nowH !== "number") return 1;
+  const w = (window || DEFAULT_WINDOW)[weekdayOf(date) % 6 === 0 ? "weekend" : "weekday"] || DEFAULT_WINDOW.weekday;
+  const a = hm(w[0]), b = hm(w[1]);
+  if (!(b > a)) return 1;
+  return Math.max(0, Math.min(1, (b - nowH) / (b - a)));
+}
+// Hours available from today to `to` (inclusive): only what's left of today, then whole days.
+function hoursUntil(settings, today, to) {
+  const cap = settings.capacity || {}, days = settings.capacityDays, fb = settings.defaultWeeklyHours;
+  let sum = 0;
+  for (let d = today; d <= to; d = addDays(d, 1))
+    sum += availableOnDay(cap, d, fb, days) * (d === today ? dayLeftShare(d, settings.nowHours, settings.workWindow) : 1);
+  return sum;
 }
 
 // Spread rule: remaining hours spread evenly over each day from max(start, today) to due.
@@ -324,8 +344,7 @@ function compute(tasks, cfg, settings, today) {
     const adj = adjusted(t, mults);
     if (!t.due || adj <= 0) continue;
     const overdue = t.due < today;
-    let avail = 0;
-    if (!overdue) for (let d = today; d <= t.due; d = addDays(d, 1)) avail += availableOnDay(cap, d, fallback);
+    const avail = overdue ? 0 : hoursUntil(settings, today, t.due);
     if (overdue || adj > avail) risk[t.path] = { overdue, need: adj, available: avail, days: overdue ? 0 : diffDays(today, t.due) + 1 };
   }
   const byName = new Map(tasks.map(t => [baseName(t.path), t]));
@@ -337,9 +356,8 @@ function compute(tasks, cfg, settings, today) {
     .sort((a, b) => urgencyOrder(cfg, mults, urg)(a, b));
   const upcoming = open.filter(t => t.start && t.start > today).length;
   const ready = t => isReady(t, byName, cfg);
-  // Next tasks you could pull forward: not started yet, dependencies done, best priority first.
-  const candidates = open.filter(t => t.start && t.start > today && ready(t))
-    .sort((a, b) => priorityRank(cfg, a.priority) - priorityRank(cfg, b.priority) || a.start.localeCompare(b.start) || (a.due || "9999").localeCompare(b.due || "9999"));
+  // Next tasks you could pull forward: not started yet, dependencies done; least slack first, as the queue.
+  const candidates = open.filter(t => t.start && t.start > today && ready(t)).sort(urgencyOrder(cfg, mults, urg));
   const doneToday = tasks.filter(t => isComplete(cfg, t.status) && t.completed === today).sort((a, b) => a.title.localeCompare(b.title));
   const blocked = new Set(open.filter(t => !ready(t)).map(t => t.path));
   // waiting on an overdue task: an unfinished dependency whose due date has passed
@@ -350,7 +368,7 @@ function compute(tasks, cfg, settings, today) {
   }
   // next 7 days: committed hours (× multipliers) per day against that day's share of the week
   const days = [];
-  for (let i = 0; i < 7; i++) days.push({ date: addDays(today, i), adj: 0, available: availableOnDay(cap, addDays(today, i), fallback) });
+  for (let i = 0; i < 7; i++) { const d = addDays(today, i); days.push({ date: d, adj: 0, available: hoursUntil(settings, d === today ? today : d, d) }); }
   const dayIdx = Object.fromEntries(days.map((d, i) => [d.date, i]));
   for (const t of open) {
     const adj = adjusted(t, mults); if (adj <= 0) continue;
@@ -363,43 +381,67 @@ function compute(tasks, cfg, settings, today) {
 }
 
 // ---------- urgency ----------
-// Tiers: 0 now (overdue, due today/tomorrow, or not enough hours before the due date),
-// 1 tight (needs at least tightPct % of the hours available before the due date), 2 normal.
-// Slack = hours available from today to the due date − real hours left. A task also takes the tier of
-// any open task that waits on it (directly or further down the chain), when that is more urgent.
+// Slack = hours available from now to the due date − real hours left (× multiplier). Work a task waits on
+// comes out of the same hours, so its slack also subtracts the hours left on its unfinished dependencies
+// (all the way up the chain). A dependency gets the smallest slack of anything waiting on it, since it has
+// to be done first.
+// Tiers: 0 now (overdue, due today/tomorrow, or negative slack), 1 tight (needs at least tightPct % of the
+// hours available), 2 normal. Order everywhere: tier, then slack (smallest first), then priority, due date.
 const TIERS = ["now", "tight", "normal"];
 function urgency(open, byName, cfg, settings, today) {
-  const mults = settings.multipliers || {}, cap = settings.capacity || {}, fallback = settings.defaultWeeklyHours;
+  const mults = settings.multipliers || {};
   const tight = (settings.tightPct || 50) / 100;
+  const isOpen = new Set(open.map(t => t.path));
   const out = {};
+  for (const t of open) out[t.path] = { need: adjusted(t, mults), avail: t.due && t.due >= today ? hoursUntil(settings, today, t.due) : 0 };
+  // open dependencies, transitively
+  const upMemo = {};
+  const upstream = (t, seen = new Set()) => {
+    if (upMemo[t.path]) return upMemo[t.path];
+    const acc = new Set();
+    for (const d of t.deps || []) {
+      const x = byName.get(d);
+      if (!x || !isOpen.has(x.path) || seen.has(x.path)) continue;
+      acc.add(x.path); seen.add(x.path);
+      for (const y of upstream(x, seen)) acc.add(y);
+    }
+    return (upMemo[t.path] = acc);
+  };
   for (const t of open) {
-    const need = adjusted(t, mults);
-    if (!t.due) { out[t.path] = { tier: 2, need, slack: null, reason: "No due date" }; continue; }
-    let avail = 0;
-    for (let d = today; d <= t.due; d = addDays(d, 1)) avail += availableOnDay(cap, d, fallback);
-    const slack = avail - need, days = diffDays(today, t.due);
+    const u = out[t.path];
+    if (!t.due) { Object.assign(u, { tier: 2, slack: null, reason: "No due date" }); continue; }
+    const ups = [...upstream(t)], upNeed = ups.reduce((a, p) => a + out[p].need, 0);
+    const slack = u.avail - u.need - upNeed, days = diffDays(today, t.due);
     let tier = 2, reason = `${fmtHours(slack)} slack`;
     if (days < 0) { tier = 0; reason = "Overdue"; }
     else if (days === 0) { tier = 0; reason = "Due today"; }
     else if (days === 1) { tier = 0; reason = "Due tomorrow"; }
-    else if (need > 0 && slack < 0) { tier = 0; reason = `Short ${fmtHours(-slack)}`; }
-    else if (need > 0 && avail > 0 && need >= tight * avail) { tier = 1; reason = `${fmtHours(slack)} slack`; }
-    out[t.path] = { tier, need, slack, reason, own: tier };
+    else if (slack < 0) { tier = 0; reason = `Short ${fmtHours(-slack)}${upNeed > 0 ? " with what it waits on" : ""}`; }
+    else if (u.avail > 0 && u.need + upNeed >= tight * u.avail) tier = 1;
+    Object.assign(u, { tier, slack: days < 0 ? -(u.need + upNeed) : slack, ownSlack: slack, upNeed, reason });
   }
-  // Inherit from dependents: repeat until nothing changes (chains are short).
+  // Dependencies take the tier and slack of what waits on them, when that is more urgent.
   for (let pass = 0, changed = true; changed && pass < 20; pass++) {
     changed = false;
     for (const t of open) for (const d of t.deps || []) {
       const x = byName.get(d), ux = x && out[x.path], ut = out[t.path];
-      if (!ux || !ut || ut.tier >= ux.tier) continue;
-      ux.tier = ut.tier; ux.reason = `Unblocks ${t.title}`; ux.via = t.path; changed = true;
+      if (!ux || !ut || ut.slack == null) continue;
+      const tierUp = ut.tier < ux.tier, slackUp = ux.slack == null || ut.slack < ux.slack;
+      if (!tierUp && !slackUp) continue;
+      if (tierUp) ux.tier = ut.tier;
+      if (slackUp) ux.slack = ut.slack;
+      ux.reason = `Unblocks ${t.title}` + (ut.tier === 0 || ut.slack < 0 ? "" : ` · ${fmtHours(ux.slack)} slack`);
+      ux.via = t.path; changed = true;
     }
   }
   for (const k in out) out[k].label = TIERS[out[k].tier];
   return out;
 }
 function urgencyOrder(cfg, mults, urg) {
-  return (a, b) => ((urg[a.path] || {}).tier ?? 2) - ((urg[b.path] || {}).tier ?? 2) ||
+  const tier = t => (urg[t.path] || {}).tier ?? 2;
+  const slack = t => { const v = (urg[t.path] || {}).slack; return typeof v === "number" ? v : Infinity; };
+  return (a, b) => tier(a) - tier(b) ||
+    slack(a) - slack(b) ||
     priorityRank(cfg, a.priority) - priorityRank(cfg, b.priority) ||
     (a.due || "9999").localeCompare(b.due || "9999") ||
     adjusted(b, mults) - adjusted(a, mults) ||
@@ -853,7 +895,7 @@ module.exports = {
   readDotpmConfig, isComplete, doneStatusId, priorityRank, label,
   linkText, parseChecklist, checklistProgress, parseTask,
   typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
-  parseCapacity, capacityTemplate, weeksInRange, spread, compute,
+  parseCapacity, capacityTemplate, weeksInRange, spread, compute, availableOnDay, dayLeftShare, hoursUntil,
   linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek,
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,
   dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,

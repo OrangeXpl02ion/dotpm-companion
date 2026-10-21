@@ -4,7 +4,8 @@ OUT=sys.argv[1]
 cases=[
  ("capacity_light",dict(tab="capacity",expanded="2026-W45")),
  ("capacity_dark",dict(tab="capacity",dark=True)),
- ("queue_light",dict(tab="queue")),
+ ("queue_light",dict(tab="queue",showMore=True)),
+ ("board_week",dict(tab="board",settings=dict(boardMode="week"))),
  ("types_light",dict(tab="types")),
  ("types_dark",dict(tab="types",dark=True)),
  ("categories_light",dict(tab="types",settings=dict(typesView="category"))),
