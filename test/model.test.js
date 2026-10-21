@@ -417,3 +417,21 @@ test("time logs keep their note", () => {
   const t = M.parseTask("a.md", { "pm-task": true, title: "x", timeLogs: [{ date: "2026-10-21", hours: 1, note: "lid", start: "09:00", end: "10:00" }] }, "", cfg);
   assert.deepEqual(t.logs[0], { date: "2026-10-21", hours: 1, start: "09:00", end: "10:00", note: "lid" });
 });
+
+test("which dotpm logs get times added", () => {
+  const T = "2026-10-21";
+  const old = [{ date: "2026-10-20", hours: 0.5, note: "" }, { date: T, hours: 1, note: "", start: "09:00", end: "10:00" }];
+  // a new log appended today without times
+  assert.deepEqual(M.logsToStamp(old, [...old, { date: T, hours: 0.5, note: "x" }], T), [2]);
+  // hours typed after the entry was made (0 → 0.5)
+  assert.deepEqual(M.logsToStamp([...old, { date: T, hours: 0, note: "" }], [...old, { date: T, hours: 0.5, note: "" }], T), [2]);
+  // a log for another day, a log already timed, or a deletion: nothing
+  assert.deepEqual(M.logsToStamp(old, [...old, { date: "2026-10-20", hours: 1, note: "" }], T), []);
+  assert.deepEqual(M.logsToStamp(old, [...old, { date: T, hours: 1, start: "11:00", end: "12:00" }], T), []);
+  assert.deepEqual(M.logsToStamp(old, [old[1]], T), []);
+  // editing an older untimed log's note doesn't count as new
+  const untimed = [{ date: T, hours: 1, note: "a" }];
+  assert.deepEqual(M.logsToStamp(untimed, [{ date: T, hours: 1, note: "ab" }], T), []);
+  assert.deepEqual(M.stampTimes(1.5, 17 * 60 + 10), { start: "15:40", end: "17:10" });
+  assert.deepEqual(M.stampTimes(2, 60), { start: "00:00", end: "01:00" });
+});

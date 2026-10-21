@@ -700,7 +700,7 @@ function renderTime(body, st, on) {
     h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k, cfg))),
     T.mode === "week" ? h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch dpc-time-avail-sw" }), "Available") : null);
   body.append(wrap, lg);
-  if (T.mode === "day" && R.untimed > 0.01) body.append(h(doc, "p", { class: "dpc-muted dpc-time-note" }, `${fmtDur(R.untimed)} logged without a start and end time is in the total but not on the chart.`));
+  if (T.mode === "day" && R.untimed > 0.01) body.append(h(doc, "p", { class: "dpc-muted dpc-time-note" }, `${fmtDur(R.untimed)} logged without a start and end time is in the total but not on the chart. Logs you add in dotpm from now on get times automatically.`));
   if (T.mode === "week") body.append(h(doc, "p", { class: "dpc-muted dpc-time-note" }, "Click a day to open it."));
 
   if (!R.rows.length) { body.append(h(doc, "p", { class: "dpc-muted" }, T.mode === "day" ? "No time logged on this day." : "No time logged this week.")); return; }

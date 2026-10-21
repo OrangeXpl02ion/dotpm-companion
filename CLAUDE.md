@@ -72,6 +72,7 @@ task in memory otherwise leaves dotpm showing stale values until it reloads.
 - Colors: categorical slots follow the work-type option order (validated palette, 9th = neutral gray).
 - Logs are written by one device (`settings.logDeviceId` vs a per-device id in local storage).
 - Undo state (`settings.undo`, `settings.pulled`) only lives for the day it was made.
+- Logs from dotpm's time panel get `start`/`end` only on the device with input in the last 2 min (`watchLogs`), never on one that received the file through sync.
 
 ## Gotchas met so far
 

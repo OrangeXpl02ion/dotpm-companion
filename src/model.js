@@ -1035,8 +1035,29 @@ function weekAverageBefore(tasks, date) {
   return v.length ? { average: v.reduce((a, b) => a + b, 0) / v.length, days: v.length } : null;
 }
 
+// Logs added (or given hours) since `before`, dated `today`, with hours but no clock times: the ones dotpm's
+// time panel just wrote. dotpm appends new logs, so anything past the old length is new; a log at the same
+// position that went from 0 hours to more counts too (hours typed after the entry was made). If the list got
+// shorter something was deleted, so nothing is stamped.
+function logsToStamp(before, after, today) {
+  const b = before || [], a = after || [], out = [];
+  if (a.length < b.length) return out;
+  a.forEach((l, i) => {
+    if (!l || l.date !== today || !(Number(l.hours) > 0) || normClock(l.start) || normClock(l.end)) return;
+    const p = b[i];
+    if (i >= b.length || (p && p.date === l.date && !(Number(p.hours) > 0))) out.push(i);
+  });
+  return out;
+}
+// Start and end for a log noticed at `nowMin` (minutes after midnight): it ends then and started `hours` earlier,
+// never before midnight.
+function stampTimes(hours, nowMin) {
+  const end = Math.round(nowMin), start = Math.max(0, end - Math.round(hours * 60));
+  return { start: fmtClock(start), end: fmtClock(end) };
+}
+
 module.exports = {
-  timeReport, weekAverageBefore, logSpan,
+  logsToStamp, stampTimes, timeReport, weekAverageBefore, logSpan,
   bodyOf, setFrontmatterLines, frontmatterOf,
   NO_TYPE, NO_PROJECT, DEFAULT_MULTIPLIER, categoryGroups, DUE_SORT, isDefaultSort,
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,

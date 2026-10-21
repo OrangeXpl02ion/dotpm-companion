@@ -285,3 +285,29 @@ test("tasks are found even when Obsidian's metadata cache is still empty (fresh 
   assert.ok(t, "parsed from the file");
   assert.equal(t.title, "Fresh"); assert.equal(t.due, "2026-11-02"); assert.equal(t.estimate, 3);
 });
+
+test("a log added in dotpm on this computer gets start and end times", async () => {
+  const { p, calls } = make(true);
+  const path = "Project/K/_tasks/a.md", T = M.localToday();
+  let fm = { timeLogs: [{ date: T, hours: 0.5, note: "sketching" }] };
+  p.app.metadataCache = { getFileCache: () => ({ frontmatter: fm }) };
+  p.settings.stampDotpmLogs = true;
+  const prev = p.tasks.get(path);
+  // no recent input here (e.g. the file arrived through sync): leave it
+  p.pendingStamp = new Map(); p.lastInput = 0;
+  p.watchLogs(path, prev);
+  assert.equal(p.pendingStamp.size, 0);
+  // you just used this computer: it waits, then stamps through dotpm's store
+  p.lastInput = Date.now();
+  p.watchLogs(path, prev);
+  const pend = p.pendingStamp.get(path);
+  assert.ok(pend); clearTimeout(pend.timer); p.pendingStamp.delete(path);
+  pend.at = 17 * 60 + 10;
+  await p.stampLogs(path, pend);
+  assert.deepEqual(calls[0], ["updateTask", "Project/K/K.md", "t1", { timeLogs: [{ date: T, hours: 0.5, note: "sketching", start: "16:40", end: "17:10" }] }]);
+  // already timed now: running again changes nothing
+  fm = { timeLogs: calls[0][3].timeLogs };
+  const n = calls.length;
+  await p.stampLogs(path, pend);
+  assert.equal(calls.length, n);
+});

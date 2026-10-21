@@ -1039,8 +1039,29 @@ function weekAverageBefore(tasks, date) {
   return v.length ? { average: v.reduce((a, b) => a + b, 0) / v.length, days: v.length } : null;
 }
 
+// Logs added (or given hours) since `before`, dated `today`, with hours but no clock times: the ones dotpm's
+// time panel just wrote. dotpm appends new logs, so anything past the old length is new; a log at the same
+// position that went from 0 hours to more counts too (hours typed after the entry was made). If the list got
+// shorter something was deleted, so nothing is stamped.
+function logsToStamp(before, after, today) {
+  const b = before || [], a = after || [], out = [];
+  if (a.length < b.length) return out;
+  a.forEach((l, i) => {
+    if (!l || l.date !== today || !(Number(l.hours) > 0) || normClock(l.start) || normClock(l.end)) return;
+    const p = b[i];
+    if (i >= b.length || (p && p.date === l.date && !(Number(p.hours) > 0))) out.push(i);
+  });
+  return out;
+}
+// Start and end for a log noticed at `nowMin` (minutes after midnight): it ends then and started `hours` earlier,
+// never before midnight.
+function stampTimes(hours, nowMin) {
+  const end = Math.round(nowMin), start = Math.max(0, end - Math.round(hours * 60));
+  return { start: fmtClock(start), end: fmtClock(end) };
+}
+
 module.exports = {
-  timeReport, weekAverageBefore, logSpan,
+  logsToStamp, stampTimes, timeReport, weekAverageBefore, logSpan,
   bodyOf, setFrontmatterLines, frontmatterOf,
   NO_TYPE, NO_PROJECT, DEFAULT_MULTIPLIER, categoryGroups, DUE_SORT, isDefaultSort,
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,
@@ -1759,7 +1780,7 @@ function renderTime(body, st, on) {
     h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k, cfg))),
     T.mode === "week" ? h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch dpc-time-avail-sw" }), "Available") : null);
   body.append(wrap, lg);
-  if (T.mode === "day" && R.untimed > 0.01) body.append(h(doc, "p", { class: "dpc-muted dpc-time-note" }, `${fmtDur(R.untimed)} logged without a start and end time is in the total but not on the chart.`));
+  if (T.mode === "day" && R.untimed > 0.01) body.append(h(doc, "p", { class: "dpc-muted dpc-time-note" }, `${fmtDur(R.untimed)} logged without a start and end time is in the total but not on the chart. Logs you add in dotpm from now on get times automatically.`));
   if (T.mode === "week") body.append(h(doc, "p", { class: "dpc-muted dpc-time-note" }, "Click a day to open it."));
 
   if (!R.rows.length) { body.append(h(doc, "p", { class: "dpc-muted" }, T.mode === "day" ? "No time logged on this day." : "No time logged this week.")); return; }
@@ -1929,6 +1950,8 @@ const VIEW_TYPE = "dotpm-companion";
 // dotpm's 5 s self-write window or dotpm keeps showing the old value.
 const PROGRESS_DELAY_MS = 1500;
 const FALLBACK_DELAY_MS = 6000;
+const STAMP_INPUT_MS = 2 * 60 * 1000; // you used this computer this recently → a new log was made here
+const STAMP_QUIET_MS = 15 * 1000;     // wait for the time panel to go quiet before adding times
 const DEFAULTS = {
   capacityFile: "Capacity.md",
   capacityRulesFile: "Claude/capacity-rules.json",
@@ -1964,6 +1987,7 @@ const DEFAULTS = {
   lastMode: "adj",
   timeMode: "day",
   timeGroup: "type",
+  stampDotpmLogs: true,
 };
 
 class CompanionView extends ItemView {
@@ -2098,6 +2122,8 @@ class CompanionView extends ItemView {
 const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   async onload() {
     this.tasks = new Map();
+    this.pendingStamp = new Map();
+    this.lastInput = 0;
     this.projectColors = {};
     this.projectNotes = {};
     this.capacity = {};
@@ -2149,6 +2175,9 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
       this.registerEvent(this.app.vault.on("modify", f => {
         if (f.path === normalizePath(this.app.vault.configDir + "/plugins/project-manager/data.json")) this.reloadDotpmConfig().then(() => this.rebuildIndex());
       }));
+      const touched = () => { this.lastInput = Date.now(); };
+      this.registerDomEvent(window, "keydown", touched, true);
+      this.registerDomEvent(window, "pointerdown", touched, true);
       this.registerInterval(window.setInterval(() => {
         if (this.result && this.result.today !== M.localToday()) { this.settings.undo = {}; this.settings.pulled = {}; this.saveSettings(); this.recompute(); this.writeSpillover(false); }
         else if (++this.ticks % 15 === 0) this.recompute(); // today's hours left shrink as the day goes on
@@ -2156,7 +2185,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
       if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("dotpm");
     });
   }
-  onunload() { for (const t of this.pendingProgress.values()) clearTimeout(t); if (this.logTimer) { clearTimeout(this.logTimer); this.flushScheduleLog(); } }
+  onunload() { for (const t of this.pendingProgress.values()) clearTimeout(t); for (const p of (this.pendingStamp || new Map()).values()) clearTimeout(p.timer); if (this.logTimer) { clearTimeout(this.logTimer); this.flushScheduleLog(); } }
 
   async loadSettings() {
     const data = (await this.loadData()) || {};
@@ -2227,7 +2256,9 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   async onChanged(file, data) {
     if (file.path === normalizePath(this.settings.capacityFile)) { this.capacity = M.parseCapacity(data); this.capacityDays = M.parseCapacityDays(data); this.scheduleRecompute(); return; }
     if (!this.inProjects(file.path)) return;
+    const prev = this.tasks.get(file.path);
     const t = await this.indexFile(file, data);
+    if (t) this.watchLogs(file.path, prev);
     this.scheduleRecompute();
     if (t && this.settings.progressFromChecklist) this.queueProgress(file.path);
     if (t && !t.workType) this.applyProjectWorkType(file.path);
@@ -2401,6 +2432,40 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   }
 
   // ---- time log ----
+  // The file's time logs, keeping every field already on each log (start/end, anything dotpm adds later).
+  rawLogs(f) {
+    const fm = (this.app.metadataCache.getFileCache(f) || {}).frontmatter || {};
+    return (Array.isArray(fm.timeLogs) ? fm.timeLogs : []).map(l => {
+      const o = { ...l, date: M.normDate(l.date) || String(l.date || ""), hours: Number(l.hours) || 0, note: typeof l.note === "string" ? l.note : "" };
+      for (const k of ["start", "end"]) { if (k in l) { const c = M.normClock(l[k]); if (c) o[k] = c; else delete o[k]; } }
+      return o;
+    });
+  }
+  // dotpm's time panel saves only a date and hours. When a log appears that way on this computer, add the time it
+  // was noticed as its end and `hours` before that as its start, so the Time tab can place it in the day.
+  // Only the computer you were using does this (input in the last 2 minutes); one that just received the file
+  // through sync leaves it alone. Waits until the file has been quiet for 15 s so a note being typed isn't cut off.
+  watchLogs(path, prev) {
+    if (!this.settings.stampDotpmLogs || this.indexing || !prev) return;
+    let p = this.pendingStamp.get(path);
+    if (!p) {
+      if (Date.now() - (this.lastInput || 0) > STAMP_INPUT_MS) return;
+      const now = new Date();
+      p = { before: prev.logs.map(l => ({ ...l })), at: now.getHours() * 60 + now.getMinutes(), day: M.localToday() };
+      this.pendingStamp.set(path, p);
+    }
+    clearTimeout(p.timer);
+    p.timer = setTimeout(() => { this.pendingStamp.delete(path); this.stampLogs(path, p).catch(e => console.warn("[dotpm-companion] could not add times to a log", e)); }, STAMP_QUIET_MS);
+  }
+  async stampLogs(path, p) {
+    const f = this.app.vault.getAbstractFileByPath(path), t = this.tasks.get(path);
+    if (!(f instanceof TFile) || !t) return;
+    const logs = this.rawLogs(f), idx = M.logsToStamp(p.before, logs, p.day);
+    if (!idx.length) return;
+    for (const i of idx) Object.assign(logs[i], M.stampTimes(logs[i].hours, p.at));
+    await this.updateTask(path, { timeLogs: logs });
+    new Notice(`Added times to your log on “${t.title}”: ${idx.map(i => `${logs[i].start}–${logs[i].end}`).join(", ")}. Change them in dotpm if they're off.`);
+  }
   logTimePicker() {
     const f = this.app.workspace.getActiveFile(), here = f && this.tasks.get(f.path);
     if (here) { new LogTimeModal(this, here).open(); return; }
@@ -2410,13 +2475,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const t = this.tasks.get(path);
     const f = this.app.vault.getAbstractFileByPath(path);
     if (!t || !(f instanceof TFile)) return;
-    const fm = (this.app.metadataCache.getFileCache(f) || {}).frontmatter || {};
-    // keep every field already on a log (start/end times, anything dotpm adds later)
-    const logs = (Array.isArray(fm.timeLogs) ? fm.timeLogs : []).map(l => {
-      const o = { ...l, date: M.normDate(l.date) || String(l.date || ""), hours: Number(l.hours) || 0, note: typeof l.note === "string" ? l.note : "" };
-      for (const k of ["start", "end"]) { if (k in l) { const c = M.normClock(l[k]); if (c) o[k] = c; else delete o[k]; } }
-      return o;
-    });
+    const logs = this.rawLogs(f);
     const today = M.localToday(), hours = v.hours;
     const entry = { date: v.dayOffset ? M.addDays(today, v.dayOffset) : today, hours, note: v.note || "" };
     if (v.start) { entry.start = v.start; entry.end = v.end; }
@@ -2732,6 +2791,8 @@ class CompanionSettings extends PluginSettingTab {
       .addToggle(t => t.setValue(S.dotpmDueSort).onChange(async v => { S.dotpmDueSort = v; await p.saveSettings(); if (v) await p.applyDotpmDueSort(); }));
     new Setting(el).setName("Work type from project").setDesc("A task without a work type in a project named like a work type (IDSA, Fun, Misc…) gets that work type.")
       .addToggle(t => t.setValue(S.workTypeFromProject).onChange(async v => { S.workTypeFromProject = v; await p.saveSettings(); }));
+    new Setting(el).setName("Add times to logs made in dotpm").setDesc("dotpm's time panel saves only the date and hours. When you add a log there, the companion sets its end to when it noticed the log and its start that many hours earlier, so the Time tab can place it in the day. Only the computer you're using does this.")
+      .addToggle(t => t.setValue(S.stampDotpmLogs).onChange(async v => { S.stampDotpmLogs = v; await p.saveSettings(); }));
     new Setting(el).setName("Quick-add default project").setDesc("Where a quick-added task goes when the line names no project.")
       .addDropdown(d => { for (const k of Object.keys(p.projectNotes).sort()) d.addOption(p.projectNotes[k].title, p.projectNotes[k].title); d.setValue(S.quickAddProject).onChange(async v => { S.quickAddProject = v; await p.saveSettings(); }); });
     new Setting(el).setName("Templates folder").setDesc("Notes with a task table, used by “New project from template”.")
