@@ -42,7 +42,7 @@ The companion reads dotpm's own files. It never renames, moves or re-IDs them.
 | Task note | `<project folder>/_tasks/<name>.md` with frontmatter `pm-task: true`, `projectId: "[[Title\|Title]]"`, `id` (16 chars), `title`, `type` (`task` · `milestone` · `subtask`), `status`, `priority`, `start`, `due` (`YYYY-MM-DD`, may be unquoted or `""`), `progress` (0–100), `dependencies` (wikilinks to task notes), optional `timeEstimate` (hours), `timeLogs` (list of `{date, hours, note}`), `completed` (date), `customFields` (`{<fieldId>: value}`). |
 | Work type | A dotpm **vault-level custom field** named exactly `work-type`, type *select*. Its option order sets the companion's colors. Tasks store it under `customFields.<fieldId>`. |
 | Statuses / priorities | dotpm's lists. A status with `complete: true` counts as done (default ids: `todo`, `in-progress`, `blocked`, `review`, `done`, `cancelled`). Priority order is list order (default `critical`, `high`, `medium`, `low`). |
-| Done when | A `## Done when` heading in the task body followed by `- [ ]` / `- [x]` items. Progress = ticked share. |
+| Done when | A `## Done when` heading in the task body followed by `- [ ]` / `- [x]` items. Progress = ticked share; a task marked done is set to 100 % whatever is ticked (0.12.0). |
 | Capacity | `Capacity.md` at the vault root (see §4). |
 
 Minimal task body:

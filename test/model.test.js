@@ -435,3 +435,28 @@ test("which dotpm logs get times added", () => {
   assert.deepEqual(M.stampTimes(1.5, 17 * 60 + 10), { start: "15:40", end: "17:10" });
   assert.deepEqual(M.stampTimes(2, 60), { start: "00:00", end: "01:00" });
 });
+
+test("done sets progress to 100 regardless of the checklist", () => {
+  const cfg = M.readDotpmConfig({});
+  const cl = { done: 1, total: 4 };
+  assert.equal(M.targetProgress(cfg, { status: "done", checklist: cl }, true), 100);
+  assert.equal(M.targetProgress(cfg, { status: "done", checklist: null }, false), 100);
+  assert.equal(M.targetProgress(cfg, { status: "in-progress", checklist: cl }, true), 25);
+  assert.equal(M.targetProgress(cfg, { status: "in-progress", checklist: cl }, false), null);
+  assert.equal(M.targetProgress(cfg, { status: "cancelled", checklist: cl }, true), 25);
+});
+
+test("a log's range is redrawn when its hours are corrected", () => {
+  const D = "2026-10-22";
+  const before = [{ date: D, hours: 10, start: "04:46", end: "14:46" }, { date: D, hours: 1, start: "09:00", end: "12:00" }];
+  assert.deepEqual(M.logsToRestamp(before, [{ ...before[0], hours: 2 }, before[1]]), [0]);
+  // a range that never matched its hours is left alone
+  assert.deepEqual(M.logsToRestamp(before, [before[0], { ...before[1], hours: 2 }]), []);
+  // hours unchanged, times edited, or log removed → nothing
+  assert.deepEqual(M.logsToRestamp(before, before), []);
+  assert.deepEqual(M.logsToRestamp(before, [{ ...before[0], hours: 2, start: "12:00" }, before[1]]), []);
+  assert.deepEqual(M.logsToRestamp(before, [before[1]]), []);
+  // past midnight
+  assert.deepEqual(M.logsToRestamp([{ date: D, hours: 2, start: "23:30", end: "01:30" }], [{ date: D, hours: 1, start: "23:30", end: "01:30" }]), [0]);
+  assert.deepEqual(M.stampTimes(2, 14 * 60 + 46), { start: "12:46", end: "14:46" });
+});

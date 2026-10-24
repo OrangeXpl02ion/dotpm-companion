@@ -318,7 +318,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const t = await this.indexFile(file, data);
     if (t) this.watchLogs(file.path, prev);
     this.scheduleRecompute();
-    if (t && this.settings.progressFromChecklist) this.queueProgress(file.path);
+    if (t) this.queueProgress(file.path);
     if (t && !t.workType) this.applyProjectWorkType(file.path);
     if (!t && data && /^---[\s\S]*?pm-project: true/.test(data)) this.applyDotpmDueSort();
   }
@@ -372,14 +372,14 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   }
   async writeProgress(path) {
     const t = this.tasks.get(path);
-    const pct = t && M.checklistProgress(t.checklist);
+    const pct = M.targetProgress(this.cfg, t, this.settings.progressFromChecklist);
     if (pct == null || pct === t.progress) return;
     await this.updateTask(path, { progress: pct });
   }
   async syncAllProgress() {
     let n = 0;
     for (const t of this.taskList()) {
-      const pct = M.checklistProgress(t.checklist);
+      const pct = M.targetProgress(this.cfg, t, this.settings.progressFromChecklist);
       if (pct != null && pct !== t.progress) { await this.updateTask(t.path, { progress: pct }); n++; }
     }
     new Notice(n ? `Updated progress on ${n} task${n === 1 ? "" : "s"}.` : "Progress already matches every checklist.");
@@ -518,11 +518,14 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   async stampLogs(path, p) {
     const f = this.app.vault.getAbstractFileByPath(path), t = this.tasks.get(path);
     if (!(f instanceof TFile) || !t) return;
-    const logs = this.rawLogs(f), idx = M.logsToStamp(p.before, logs, p.day);
-    if (!idx.length) return;
+    const logs = this.rawLogs(f), idx = M.logsToStamp(p.before, logs, p.day), fix = M.logsToRestamp(p.before, logs);
+    if (!idx.length && !fix.length) return;
     for (const i of idx) Object.assign(logs[i], M.stampTimes(logs[i].hours, p.at));
+    // hours changed on a log whose times matched the old hours: keep its end, move its start
+    for (const i of fix) { const [hh, mm] = logs[i].end.split(":").map(Number); Object.assign(logs[i], M.stampTimes(logs[i].hours, hh * 60 + mm)); }
     await this.updateTask(path, { timeLogs: logs });
-    new Notice(`Added times to your log on “${t.title}”: ${idx.map(i => `${logs[i].start}–${logs[i].end}`).join(", ")}. Change them in dotpm if they're off.`);
+    const all = [...idx, ...fix];
+    new Notice(`${idx.length ? "Added" : "Updated"} times on your log on “${t.title}”: ${all.map(i => `${logs[i].start}–${logs[i].end}`).join(", ")}. Change them in dotpm if they're off.`);
   }
   logTimePicker() {
     const f = this.app.workspace.getActiveFile(), here = f && this.tasks.get(f.path);

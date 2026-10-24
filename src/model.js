@@ -78,6 +78,14 @@ function parseChecklist(body) {
   return total ? { done, total } : null;
 }
 function checklistProgress(cl) { return cl && cl.total ? Math.round((cl.done / cl.total) * 100) : null; }
+// Progress the companion keeps on a task: 100 once it's marked done (the Done-when list may have changed along
+// the way, so unticked boxes don't hold it back), otherwise the share of Done-when boxes ticked (only when
+// `fromChecklist`). null = leave progress alone.
+function targetProgress(cfg, t, fromChecklist) {
+  if (!t) return null;
+  if (t.status === doneStatusId(cfg)) return 100;
+  return fromChecklist ? checklistProgress(t.checklist) : null;
+}
 
 function parseTask(path, fm, body, cfg) {
   if (!fm || fm["pm-task"] !== true) return null;
@@ -1049,6 +1057,22 @@ function logsToStamp(before, after, today) {
   });
   return out;
 }
+// Logs whose hours were changed after they got a start and end that matched the old hours (a typo fixed in
+// dotpm's time panel, e.g. 10 → 1.0): the range no longer fits, so it should be redrawn ending at the same time.
+// A range that never matched its hours (typed by hand that way) is left alone.
+function logsToRestamp(before, after) {
+  const b = before || [], a = after || [], out = [];
+  if (a.length < b.length) return out;
+  a.forEach((l, i) => {
+    const p = b[i];
+    if (!l || !p || l.date !== p.date || !(Number(l.hours) > 0) || Math.abs(Number(l.hours) - Number(p.hours)) < 1e-9) return;
+    const s = normClock(p.start), e = normClock(p.end);
+    if (!s || !e || normClock(l.start) !== s || normClock(l.end) !== e) return;
+    let span = hm(e) - hm(s); if (span <= 0) span += 24;
+    if (Math.abs(span - Number(p.hours)) <= 1 / 60 + 1e-9) out.push(i);
+  });
+  return out;
+}
 // Start and end for a log noticed at `nowMin` (minutes after midnight): it ends then and started `hours` earlier,
 // never before midnight.
 function stampTimes(hours, nowMin) {
@@ -1057,7 +1081,7 @@ function stampTimes(hours, nowMin) {
 }
 
 module.exports = {
-  logsToStamp, stampTimes, timeReport, weekAverageBefore, logSpan,
+  logsToStamp, logsToRestamp, targetProgress, stampTimes, timeReport, weekAverageBefore, logSpan,
   bodyOf, setFrontmatterLines, frontmatterOf,
   NO_TYPE, NO_PROJECT, DEFAULT_MULTIPLIER, categoryGroups, DUE_SORT, isDefaultSort,
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,

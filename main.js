@@ -82,6 +82,14 @@ function parseChecklist(body) {
   return total ? { done, total } : null;
 }
 function checklistProgress(cl) { return cl && cl.total ? Math.round((cl.done / cl.total) * 100) : null; }
+// Progress the companion keeps on a task: 100 once it's marked done (the Done-when list may have changed along
+// the way, so unticked boxes don't hold it back), otherwise the share of Done-when boxes ticked (only when
+// `fromChecklist`). null = leave progress alone.
+function targetProgress(cfg, t, fromChecklist) {
+  if (!t) return null;
+  if (t.status === doneStatusId(cfg)) return 100;
+  return fromChecklist ? checklistProgress(t.checklist) : null;
+}
 
 function parseTask(path, fm, body, cfg) {
   if (!fm || fm["pm-task"] !== true) return null;
@@ -1053,6 +1061,22 @@ function logsToStamp(before, after, today) {
   });
   return out;
 }
+// Logs whose hours were changed after they got a start and end that matched the old hours (a typo fixed in
+// dotpm's time panel, e.g. 10 → 1.0): the range no longer fits, so it should be redrawn ending at the same time.
+// A range that never matched its hours (typed by hand that way) is left alone.
+function logsToRestamp(before, after) {
+  const b = before || [], a = after || [], out = [];
+  if (a.length < b.length) return out;
+  a.forEach((l, i) => {
+    const p = b[i];
+    if (!l || !p || l.date !== p.date || !(Number(l.hours) > 0) || Math.abs(Number(l.hours) - Number(p.hours)) < 1e-9) return;
+    const s = normClock(p.start), e = normClock(p.end);
+    if (!s || !e || normClock(l.start) !== s || normClock(l.end) !== e) return;
+    let span = hm(e) - hm(s); if (span <= 0) span += 24;
+    if (Math.abs(span - Number(p.hours)) <= 1 / 60 + 1e-9) out.push(i);
+  });
+  return out;
+}
 // Start and end for a log noticed at `nowMin` (minutes after midnight): it ends then and started `hours` earlier,
 // never before midnight.
 function stampTimes(hours, nowMin) {
@@ -1061,7 +1085,7 @@ function stampTimes(hours, nowMin) {
 }
 
 module.exports = {
-  logsToStamp, stampTimes, timeReport, weekAverageBefore, logSpan,
+  logsToStamp, logsToRestamp, targetProgress, stampTimes, timeReport, weekAverageBefore, logSpan,
   bodyOf, setFrontmatterLines, frontmatterOf,
   NO_TYPE, NO_PROJECT, DEFAULT_MULTIPLIER, categoryGroups, DUE_SORT, isDefaultSort,
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,
@@ -2260,7 +2284,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const t = await this.indexFile(file, data);
     if (t) this.watchLogs(file.path, prev);
     this.scheduleRecompute();
-    if (t && this.settings.progressFromChecklist) this.queueProgress(file.path);
+    if (t) this.queueProgress(file.path);
     if (t && !t.workType) this.applyProjectWorkType(file.path);
     if (!t && data && /^---[\s\S]*?pm-project: true/.test(data)) this.applyDotpmDueSort();
   }
@@ -2314,14 +2338,14 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   }
   async writeProgress(path) {
     const t = this.tasks.get(path);
-    const pct = t && M.checklistProgress(t.checklist);
+    const pct = M.targetProgress(this.cfg, t, this.settings.progressFromChecklist);
     if (pct == null || pct === t.progress) return;
     await this.updateTask(path, { progress: pct });
   }
   async syncAllProgress() {
     let n = 0;
     for (const t of this.taskList()) {
-      const pct = M.checklistProgress(t.checklist);
+      const pct = M.targetProgress(this.cfg, t, this.settings.progressFromChecklist);
       if (pct != null && pct !== t.progress) { await this.updateTask(t.path, { progress: pct }); n++; }
     }
     new Notice(n ? `Updated progress on ${n} task${n === 1 ? "" : "s"}.` : "Progress already matches every checklist.");
@@ -2460,11 +2484,14 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
   async stampLogs(path, p) {
     const f = this.app.vault.getAbstractFileByPath(path), t = this.tasks.get(path);
     if (!(f instanceof TFile) || !t) return;
-    const logs = this.rawLogs(f), idx = M.logsToStamp(p.before, logs, p.day);
-    if (!idx.length) return;
+    const logs = this.rawLogs(f), idx = M.logsToStamp(p.before, logs, p.day), fix = M.logsToRestamp(p.before, logs);
+    if (!idx.length && !fix.length) return;
     for (const i of idx) Object.assign(logs[i], M.stampTimes(logs[i].hours, p.at));
+    // hours changed on a log whose times matched the old hours: keep its end, move its start
+    for (const i of fix) { const [hh, mm] = logs[i].end.split(":").map(Number); Object.assign(logs[i], M.stampTimes(logs[i].hours, hh * 60 + mm)); }
     await this.updateTask(path, { timeLogs: logs });
-    new Notice(`Added times to your log on “${t.title}”: ${idx.map(i => `${logs[i].start}–${logs[i].end}`).join(", ")}. Change them in dotpm if they're off.`);
+    const all = [...idx, ...fix];
+    new Notice(`${idx.length ? "Added" : "Updated"} times on your log on “${t.title}”: ${all.map(i => `${logs[i].start}–${logs[i].end}`).join(", ")}. Change them in dotpm if they're off.`);
   }
   logTimePicker() {
     const f = this.app.workspace.getActiveFile(), here = f && this.tasks.get(f.path);
