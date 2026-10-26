@@ -18,6 +18,9 @@ cases=[
  ("time_week",dict(tab="time",today="2026-10-21",time=dict(mode="week",group="project"),mutate=TIME_MUT,settings=dict(capacityDays={"2026-10-19":9,"2026-10-20":6,"2026-10-21":9.5,"2026-10-22":8.5,"2026-10-23":10,"2026-10-24":9,"2026-10-25":9}))),
 
  ("capacity_light",dict(tab="capacity",expanded="2026-W45")),
+ ("git_synced",dict(tab="board",git=dict(state="synced",text="Pushed 3 min ago",detail="Everything here is on GitHub."))),
+ ("git_pending",dict(tab="board",git=dict(state="pending",text="Not pushed · 2 files",detail="2 files not on GitHub yet"))),
+ ("git_stale_dark",dict(tab="board",dark=True,git=dict(state="stale",text="Not pushed · 1 commit",detail="Push before you leave"))),
  ("capacity_dark",dict(tab="capacity",dark=True)),
  ("queue_light",dict(tab="queue",showMore=True)),
  ("board_week",dict(tab="board",settings=dict(boardMode="week"))),

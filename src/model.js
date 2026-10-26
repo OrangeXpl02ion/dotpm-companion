@@ -1080,7 +1080,63 @@ function stampTimes(hours, nowMin) {
   return { start: fmtClock(start), end: fmtClock(end) };
 }
 
+// ---------- Git push status ----------
+// "3 min ago" style age from minutes.
+function fmtAgo(min) {
+  if (!(min >= 1)) return "just now";
+  if (min < 60) return `${Math.round(min)} min ago`;
+  if (min < 24 * 60) return `${Math.round(min / 60)} h ago`;
+  return `${Math.round(min / (24 * 60))} d ago`;
+}
+// `git status --porcelain=v1 --branch` → branch, upstream, ahead/behind and changed paths.
+function parseGitPorcelain(out) {
+  const lines = String(out || "").split(/\r?\n/).filter(Boolean);
+  const r = { branch: null, upstream: null, ahead: 0, behind: 0, gone: false, paths: [] };
+  for (const l of lines) {
+    if (l.startsWith("## ")) {
+      const m = l.slice(3).match(/^(?:No commits yet on |Initial commit on )?(.+?)(?:\.\.\.(\S+))?(?: \[(.+)\])?$/);
+      if (m) {
+        r.branch = m[1]; r.upstream = m[2] || null;
+        const b = m[3] || "";
+        const a = b.match(/ahead (\d+)/), h = b.match(/behind (\d+)/);
+        r.ahead = a ? +a[1] : 0; r.behind = h ? +h[1] : 0; r.gone = /gone/.test(b);
+      }
+      continue;
+    }
+    let p = l.slice(3);
+    if (p.includes(" -> ")) p = p.split(" -> ").pop();
+    if (p.startsWith('"') && p.endsWith('"')) p = p.slice(1, -1).replace(/\\(.)/g, "$1");
+    r.paths.push(p);
+  }
+  return r;
+}
+// What the push indicator shows. Input: { repo, error, porcelain (parsed), editTimes (ms of each uncommitted
+// file's last change), aheadTimes (ms of each commit not pushed), lastPushedMs (commit time of the upstream
+// head), now (ms), warnMin }. State: none | error | noremote | synced | behind | pending | stale.
+function gitPushStatus(g) {
+  if (!g || !g.repo) return { state: "none", text: "", detail: "This vault isn't a Git repository." };
+  if (g.error) return { state: "error", text: "Git: error", detail: String(g.error) };
+  const s = g.porcelain || { paths: [], ahead: 0, behind: 0 };
+  if (!s.upstream || s.gone) return { state: "noremote", text: "Not linked to GitHub", detail: `Branch ${s.branch || "?"} has no remote to push to.` };
+  const now = g.now, files = s.paths.length, ahead = s.ahead;
+  const times = [...(g.editTimes || []), ...(g.aheadTimes || [])].filter(x => x > 0);
+  const oldestMin = times.length ? Math.max(0, (now - Math.min(...times)) / 60000) : 0;
+  const pulled = s.behind ? ` · ${s.behind} to pull` : "";
+  if (files || ahead) {
+    const what = [files ? `${files} file${files === 1 ? "" : "s"}` : "", ahead ? `${ahead} commit${ahead === 1 ? "" : "s"}` : ""].filter(Boolean).join(" + ");
+    const stale = oldestMin >= (g.warnMin || 10);
+    return { state: stale ? "stale" : "pending", text: `Not pushed · ${what}${pulled}`, files, ahead, behind: s.behind, oldestMin,
+      detail: `${what} not on GitHub yet; oldest change ${fmtAgo(oldestMin)}.${stale ? " Push before you leave this computer." : ""} Click to commit and sync.` };
+  }
+  const lastMin = g.lastPushedMs ? (now - g.lastPushedMs) / 60000 : null;
+  if (s.behind) return { state: "behind", text: `${s.behind} update${s.behind === 1 ? "" : "s"} to pull`, behind: s.behind, lastMin,
+    detail: "Another computer pushed changes this one doesn't have yet. Click to sync." };
+  return { state: "synced", text: lastMin == null ? "Pushed" : `Pushed ${fmtAgo(lastMin)}`, lastMin,
+    detail: "Everything here is on GitHub." + (lastMin == null ? "" : ` Latest pushed change: ${fmtAgo(lastMin)}.`) };
+}
+
 module.exports = {
+  fmtAgo, parseGitPorcelain, gitPushStatus,
   logsToStamp, logsToRestamp, targetProgress, stampTimes, timeReport, weekAverageBefore, logSpan,
   bodyOf, setFrontmatterLines, frontmatterOf,
   NO_TYPE, NO_PROJECT, DEFAULT_MULTIPLIER, categoryGroups, DUE_SORT, isDefaultSort,

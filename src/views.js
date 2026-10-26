@@ -57,7 +57,8 @@ function render(root, st, on) {
       ? h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Hours shown" },
           [["adj", "× multipliers"], ["raw", "Raw estimates"]].map(([id, name]) =>
             h(doc, "button", { class: "dpc-seg-btn" + (st.mode === id ? " is-active" : ""), "aria-pressed": st.mode === id, onclick: () => on.setMode(id) }, name)))
-      : null);
+      : null,
+    gitChip(doc, st.git, on));
   root.append(bar);
   if (st.tab === "dotpm") { renderDotpm(root, st, on); return; }
   if (!st.result) { root.append(h(doc, "p", { class: "dpc-muted" }, "Reading tasks…")); return; }
@@ -66,6 +67,13 @@ function render(root, st, on) {
   ({ board: renderBoard, projects: renderProjects, capacity: renderCapacity, types: renderTypes, multipliers: renderMultipliers, time: renderTime }[st.tab] || renderBoard)(body, st, on);
 }
 
+// Push status beside the tabs (hidden when the vault isn't a Git repository or on mobile).
+function gitChip(doc, g, on) {
+  if (!g || g.state === "none") return h(doc, "span", { class: "dpc-git-chip dpc-git-none" });
+  const icon = { synced: "\u2713", pending: "\u2191", stale: "!", behind: "\u2193", noremote: "\u2013", error: "!" }[g.state] || "";
+  return h(doc, "button", { class: `dpc-git-chip dpc-git-${g.state}`, title: g.detail || "", "aria-label": `${g.text}. ${g.detail || ""}`,
+    onclick: () => on.gitSync && on.gitSync() }, h(doc, "span", { class: "dpc-git-dot", "aria-hidden": "true" }, icon), g.text);
+}
 function taskLink(doc, t, on) {
   return h(doc, "a", { class: "dpc-task-link", href: "#", onclick: e => { e.preventDefault(); on.openTask(t.path); } }, t.title);
 }
@@ -857,4 +865,4 @@ function trendChart(doc, body, cfg, history, keys, today, measuredSeries) {
   return wrap;
 }
 
-module.exports = { render, typeColor, typeKeys, typeName, fmtH, fmtX };
+module.exports = { render, gitChip, typeColor, typeKeys, typeName, fmtH, fmtX };

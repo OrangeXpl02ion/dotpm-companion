@@ -14,7 +14,7 @@ projects. dotpm owns the data (Markdown notes with frontmatter); the companion r
 | --- | --- |
 | `src/model.js` | Pure logic, no Obsidian imports: date helpers, dotpm config, task parsing, capacity/spread/at-risk, queue, board, multipliers + history + measured series, project stats, time spent per day/week (`timeReport`), quick-add, quick-capacity and time-log parsing, Capacity.md / rules-file edits, schedule/spillover rows, templates, file fallbacks. Unit-tested. |
 | `src/views.js` | Plain-DOM rendering of every tab (`render(root, state, handlers)`). No Obsidian helpers, so it renders in a browser for tests. |
-| `src/main.js` | Obsidian glue: plugin class, `CompanionView` (an `ItemView`), dotpm bridge, indexing, commands, modals, settings tab, logs. |
+| `src/main.js` | Obsidian glue: plugin class, `CompanionView` (an `ItemView`), dotpm bridge, indexing, commands, modals, settings tab, logs, Git push status (runs `git` read-only via `child_process`, desktop only; status logic is `gitPushStatus` in `model.js`). |
 | `styles.css` | All styles, scoped under `.dpc-root` / `.dpc-*`; colors via Obsidian CSS variables and `--dpc-s1…s9`. |
 | `build.js` | Dependency-free bundler: wraps `src/*.js` into one CommonJS `main.js`. **`main.js` is generated — edit `src/`.** |
 | `test/*.test.js` | `node --test`. `fixture/vault.json` is sample data shaped like a real vault. `embed.test.js` fakes dotpm's view; `bridge.test.js` fakes dotpm's store. |
