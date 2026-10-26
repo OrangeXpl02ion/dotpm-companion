@@ -287,3 +287,18 @@
 .dpc-time-of { font-size: 12px; white-space: nowrap; text-align: right; overflow: hidden; text-overflow: ellipsis; }
 .dpc-time-bad { color: var(--color-red); }
 .dpc-time-sess { font-size: 12px; font-family: var(--font-monospace, ui-monospace, monospace); }
+
+/* Git push status */
+.dpc-git-chip { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; height: auto; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--background-modifier-border); background: var(--background-secondary); box-shadow: none; font-size: var(--font-ui-small); color: var(--text-muted); cursor: pointer; white-space: nowrap; }
+.dpc-git-chip:hover { color: var(--text-normal); }
+.dpc-git-none { display: none; }
+.dpc-git-dot { display: inline-flex; align-items: center; justify-content: center; width: 16px; height: 16px; border-radius: 50%; font-size: 10px; font-weight: 700; color: var(--text-on-accent); background: var(--text-faint); }
+.dpc-git-synced .dpc-git-dot { background: var(--color-green); }
+.dpc-git-pending .dpc-git-dot, .dpc-git-behind .dpc-git-dot { background: var(--color-orange); }
+.dpc-git-stale .dpc-git-dot, .dpc-git-error .dpc-git-dot { background: var(--color-red); }
+.dpc-git-stale.dpc-git-chip { color: var(--text-error); border-color: var(--color-red); }
+.status-bar-item.dpc-git-bar { cursor: pointer; }
+.status-bar-item.dpc-git-bar.dpc-hidden { display: none; }
+.status-bar-item.dpc-git-synced { color: var(--color-green); }
+.status-bar-item.dpc-git-pending, .status-bar-item.dpc-git-behind { color: var(--color-orange); }
+.status-bar-item.dpc-git-stale, .status-bar-item.dpc-git-error { color: var(--color-red); font-weight: 600; }

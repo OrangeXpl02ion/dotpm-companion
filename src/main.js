@@ -46,6 +46,9 @@ const DEFAULTS = {
   timeMode: "day",
   timeGroup: "type",
   stampDotpmLogs: true,
+  gitStatus: true,
+  gitWarnMinutes: 10,
+  gitPath: "git",
 };
 
 class CompanionView extends ItemView {
@@ -139,8 +142,10 @@ class CompanionView extends ItemView {
       cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity, capacityDays: p.capacityDays || {} }, tasks: p.taskList(), result: p.result,
       time: { mode: p.settings.timeMode, group: p.settings.timeGroup, date: this.timeDate }, today: M.localToday(),
       nowHours: (() => { const n = new Date(); return n.getHours() + n.getMinutes() / 60; })(), workWindow: p.workWindow || null,
+      git: p.gitView(),
     }, {
       setTab: t => this.switchTab(t),
+      gitSync: () => p.gitSync(),
       mountDotpm: host => this.mountDotpm(host),
       openDotpmTab: () => p.openDotpmInTab(),
       setMode: m => { this.mode = m; p.settings.lastMode = m; p.saveSettings(); this.refresh(); },
@@ -213,6 +218,8 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.addCommand({ id: "reindex", name: "Re-read all tasks", callback: async () => { await this.reloadDotpmConfig(); await this.rebuildIndex(); new Notice(`Re-read ${this.tasks.size} tasks.`); } });
     this.addCommand({ id: "write-spillover", name: "Write last week's spillover now", callback: () => this.writeSpillover(true) });
     this.addCommand({ id: "sync-progress", name: "Update progress from Done-when checklists (all tasks)", callback: () => this.syncAllProgress() });
+    this.addCommand({ id: "git-sync", name: "Commit and sync with Git now", callback: () => this.gitSync() });
+    this.addCommand({ id: "git-refresh", name: "Refresh Git push status", callback: () => this.refreshGit(true) });
     this.addSettingTab(new CompanionSettings(this.app, this));
 
     this.scheduleRecompute = debounce(() => this.recompute(), 400, true);
@@ -240,8 +247,82 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
         if (this.result && this.result.today !== M.localToday()) { this.settings.undo = {}; this.settings.pulled = {}; this.saveSettings(); this.recompute(); this.writeSpillover(false); }
         else if (++this.ticks % 15 === 0) this.recompute(); // today's hours left shrink as the day goes on
       }, 60 * 1000));
+      this.startGitWatch();
       if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("dotpm");
     });
+  }
+
+  // ---------- Git push status (desktop only; reads the vault's own Git repository) ----------
+  gitAvailable() { return !!(Platform && Platform.isDesktopApp && this.settings.gitStatus); }
+  gitView() { return this.gitAvailable() ? this.git || null : null; }
+  startGitWatch() {
+    if (!this.gitAvailable()) return;
+    this.gitBar = this.addStatusBarItem();
+    this.gitBar.addClass("dpc-git-bar");
+    this.registerDomEvent(this.gitBar, "click", () => this.gitSync());
+    const soon = debounce(() => this.refreshGit(), 3000, true);
+    this.registerEvent(this.app.vault.on("modify", () => soon()));
+    this.registerEvent(this.app.vault.on("create", () => soon()));
+    this.registerEvent(this.app.vault.on("delete", () => soon()));
+    this.registerDomEvent(window, "focus", () => soon());
+    this.registerInterval(window.setInterval(() => this.refreshGit(), 30 * 1000));
+    this.refreshGit(true);
+  }
+  runGit(args, cwd) {
+    const { execFile } = require("child_process");
+    return new Promise((res, rej) => execFile(this.settings.gitPath || "git", args, { cwd, timeout: 10000, windowsHide: true, maxBuffer: 4 << 20 },
+      (err, out, errOut) => err ? rej(Object.assign(err, { stderr: String(errOut || "") })) : res(String(out))));
+  }
+  async readGit() {
+    const base = this.app.vault.adapter && this.app.vault.adapter.getBasePath && this.app.vault.adapter.getBasePath();
+    if (!base) return { repo: false };
+    let top;
+    try { top = (await this.runGit(["rev-parse", "--show-toplevel"], base)).trim(); }
+    catch (e) { return e && e.code === "ENOENT" ? { repo: true, error: `Git isn't installed or isn't at “${this.settings.gitPath}”.` } : { repo: false }; }
+    const porcelain = M.parseGitPorcelain(await this.runGit(["status", "--porcelain=v1", "--branch", "-uall"], top));
+    const path = require("path"), fs = require("fs");
+    const editTimes = await Promise.all(porcelain.paths.slice(0, 200).map(f =>
+      fs.promises.stat(path.join(top, f)).then(st => st.mtimeMs, () => Date.now())));
+    let aheadTimes = [], lastPushedMs = null;
+    if (porcelain.upstream && !porcelain.gone) {
+      const sec = out => out.split(/\s+/).filter(Boolean).map(x => +x * 1000);
+      try { aheadTimes = sec(await this.runGit(["log", "--format=%ct", "@{u}..HEAD"], top)); } catch (e) { /* no commits yet */ }
+      try { lastPushedMs = sec(await this.runGit(["log", "-1", "--format=%ct", "@{u}"], top))[0] || null; } catch (e) { /* empty remote */ }
+    }
+    return { repo: true, porcelain, editTimes, aheadTimes, lastPushedMs };
+  }
+  async refreshGit(force) {
+    if (!this.gitAvailable() || (this.gitBusy && !force)) return;
+    this.gitBusy = true;
+    let raw;
+    try { raw = await this.readGit(); } catch (e) { raw = { repo: true, error: (e && (e.stderr || e.message)) || String(e) }; }
+    finally { this.gitBusy = false; }
+    const g = M.gitPushStatus({ ...raw, now: Date.now(), warnMin: Number(this.settings.gitWarnMinutes) || 10 });
+    const changed = !this.git || this.git.state !== g.state || this.git.text !== g.text;
+    this.git = g;
+    if (this.gitBar) {
+      this.gitBar.setText(g.state === "none" ? "" : g.text);
+      this.gitBar.className = `status-bar-item plugin-dotpm-companion dpc-git-bar dpc-git-${g.state}` + (g.state === "none" ? " dpc-hidden" : "");
+      this.gitBar.setAttribute("aria-label", g.detail || "");
+      this.gitBar.setAttribute("data-tooltip-position", "top");
+    }
+    if (changed) this.updateGitChips();
+  }
+  // Swap the chip in place so it also updates while the hosted dotpm view is showing (that tab isn't redrawn).
+  updateGitChips() {
+    for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) {
+      const el = leaf.view && leaf.view.contentEl && leaf.view.contentEl.querySelector(".dpc-git-chip");
+      if (el) el.replaceWith(V.gitChip(el.ownerDocument, this.gitView(), { gitSync: () => this.gitSync() }));
+    }
+  }
+  // Runs the Obsidian Git plugin's commit-and-sync (pull, commit, push).
+  async gitSync() {
+    const cmds = Object.values((this.app.commands && this.app.commands.commands) || {}).filter(c => /^obsidian-git:/.test(c.id));
+    const pick = cmds.find(c => /commit-and-sync$/i.test(c.name) && !/close/i.test(c.name))
+      || cmds.find(c => /create backup$/i.test(c.name)) || cmds.find(c => c.id === "obsidian-git:push");
+    if (!pick) { new Notice("Install and enable the Obsidian Git plugin to push from here."); return; }
+    this.app.commands.executeCommandById(pick.id);
+    for (const ms of [4000, 12000, 30000]) window.setTimeout(() => this.refreshGit(true), ms);
   }
   onunload() { for (const t of this.pendingProgress.values()) clearTimeout(t); for (const p of (this.pendingStamp || new Map()).values()) clearTimeout(p.timer); if (this.logTimer) { clearTimeout(this.logTimer); this.flushScheduleLog(); } }
 
@@ -866,6 +947,13 @@ class CompanionSettings extends PluginSettingTab {
       .addToggle(t => t.setValue(p.isLogDevice()).onChange(async v => { await p.setLogHere(v); this.display(); }));
     new Setting(el).setName("Open on startup").setDesc("Open the companion on the dotpm tab when Obsidian starts.")
       .addToggle(t => t.setValue(S.openOnStartup).onChange(async v => { S.openOnStartup = v; await p.saveSettings(); }));
+    new Setting(el).setName("Git push status").setHeading();
+    new Setting(el).setName("Show Git push status").setDesc("Desktop only. Shows in the status bar and beside the companion's tabs whether every change in this vault is pushed to GitHub. Click it to commit and sync with the Obsidian Git plugin.")
+      .addToggle(t => t.setValue(S.gitStatus).onChange(async v => { S.gitStatus = v; await p.saveSettings(); new Notice("Reload Obsidian to apply."); }));
+    new Setting(el).setName("Warn after (minutes)").setDesc("Turns the indicator red when a change has waited this long without being pushed.")
+      .addText(t => t.setValue(String(S.gitWarnMinutes)).onChange(async v => { const n = Number(v); if (n > 0) { S.gitWarnMinutes = n; await p.saveSettings(); p.refreshGit(true); } }));
+    new Setting(el).setName("Git program").setDesc("Leave as “git” unless Git isn't on your PATH (then the full path, e.g. C:\\Program Files\\Git\\cmd\\git.exe).")
+      .addText(t => t.setValue(S.gitPath).onChange(async v => { S.gitPath = v.trim() || "git"; await p.saveSettings(); p.refreshGit(true); }));
     new Setting(el).setName("Multipliers").setHeading();
     for (const k of V.typeKeys(p.cfg)) {
       new Setting(el).setName(V.typeName(k, p.cfg)).addText(t => t.setValue(String(M.multiplierFor(S.multipliers, k))).onChange(v => {
@@ -1061,6 +1149,7 @@ class DiagnosticsModal extends Modal {
       ["Planning range", `${p.settings.rangeStart} → ${p.settings.rangeEnd}`],
       ["Last read", p.diag.lastIndex || "never"],
       ["Logs written here", p.isLogDevice() ? "yes" : "no"],
+      ["Git", !p.gitAvailable() ? "off on this device" : p.git ? `${p.git.state}: ${p.git.text || "—"} (${p.git.detail})` : "not read yet"],
     ];
     const tbl = el.createEl("table", { cls: "dpc-table" });
     for (const [k, v] of rows) { const tr = tbl.createEl("tr"); tr.createEl("td", { text: k }); tr.createEl("td", { text: String(v) }); }

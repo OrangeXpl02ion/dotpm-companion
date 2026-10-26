@@ -136,6 +136,8 @@ laptop to reach the desktop that runs the rebuild, Obsidian Sync needs *Sync all
 | Create capacity file | Writes a `Capacity.md` template. |
 | **Show diagnostics** | What the companion sees on this device: version, dotpm loaded, projects folder, projects/tasks found, capacity weeks read. *Copy* puts it on the clipboard. |
 | Re-read all tasks | Rebuild the index (e.g. after a big sync). |
+| **Commit and sync with Git now** | Runs the Obsidian Git plugin's *Commit-and-sync* (pull, commit, push). Same as clicking the push indicator. |
+| Refresh Git push status | Re-reads the vault's Git state at once (it also refreshes every 30 s and a few seconds after any file change). |
 
 ---
 
@@ -157,6 +159,9 @@ laptop to reach the desktop that runs the rebuild, Obsidian Sync needs *Sync all
 | Schedule log | on | Writes `Schedule log.md` and Monday `Spillover.md`. |
 | Write the logs from this device | first desktop | A switch on each device (stored locally). Turn it on only on your main computer; turning it on takes over from other devices. |
 | Open on startup | on | |
+| Show Git push status | on | Desktop only, and only when the vault is a Git repository. See §9. Takes effect after reloading Obsidian. |
+| Warn after (minutes) | 10 | The indicator turns red when a change has gone this long without being pushed. |
+| Git program | `git` | Full path if Git isn't on your PATH (Windows: `C:\Program Files\Git\cmd\git.exe`). |
 | Multipliers | 2.0× each | Every change is kept in the history. |
 
 ---
@@ -186,3 +191,27 @@ laptop to reach the desktop that runs the rebuild, Obsidian Sync needs *Sync all
 | A work type shows "(not in dotpm's list)" | The option was removed in dotpm's settings; change those tasks' work type in dotpm. |
 | Every week is "Over" | `Capacity.md` missing or multipliers still at 2.0×. |
 | A folder can't be deleted on Windows ("You require permission from …") | Close Obsidian; in an admin PowerShell: `takeown /f "<folder>" /r /d y`, `icacls "<folder>" /grant "${env:USERNAME}:F" /t`, `Remove-Item "<folder>" -Recurse -Force`. |
+
+---
+
+## 9. Git push status
+
+When the vault is a Git repository (synced with the [Obsidian Git](https://github.com/denolehov/obsidian-git) plugin),
+the companion shows whether everything on this computer is on GitHub, in the **status bar** and as a chip **beside the
+tabs**:
+
+| Shows | Means |
+| --- | --- |
+| ✓ **Pushed 3 min ago** (green) | Nothing waiting. The time is when the newest change on GitHub was made. |
+| ↑ **Not pushed · 2 files** (orange) | Edits here aren't on GitHub yet (uncommitted files and/or commits not pushed). |
+| ! **Not pushed · …** (red) | The oldest of those edits is older than *Warn after* — push before leaving this computer. |
+| ↓ **1 update to pull** (orange) | Another computer pushed changes this one hasn't pulled (as of Obsidian Git's last fetch). |
+| **Not linked to GitHub** | The repository has no remote branch to push to. |
+| **Git: error** | Git couldn't run; hover for the message (e.g. Git not installed — set *Git program*). |
+
+Click the indicator to run Obsidian Git's *Commit-and-sync*. It reads Git with `git status` / `git log` only — it
+never commits, pulls or pushes by itself. Hidden on mobile (no Git there) and when the vault isn't a repository.
+
+Suggested Obsidian Git settings so pushes happen without thinking: *Auto commit-and-sync interval* 1–2 min, *Pull on
+startup* on, and a hotkey on *Commit-and-sync and close* to use instead of quitting.
+
