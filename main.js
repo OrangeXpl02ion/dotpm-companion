@@ -1373,7 +1373,14 @@ function render(root, st, on) {
 }
 
 function taskLink(doc, t, on) {
-  return h(doc, "a", { class: "dpc-task-link", href: "#", onclick: e => { e.preventDefault(); on.openTask(t.path); } }, t.title);
+  return h(doc, "a", { class: "dpc-task-link", href: "#", onclick: e => { e.preventDefault(); on.openTask(t.path); },
+    oncontextmenu: e => { if (!on.taskMenu) return; e.preventDefault(); on.taskMenu(t.path, e); } }, t.title);
+}
+// The task's project as a button: click to move the task to another project (dotpm moves the note and its subtasks).
+function projectButton(doc, t, on, cls) {
+  if (!on || !on.moveProject) return t.project || "—";
+  return h(doc, "button", { class: "dpc-proj-btn" + (cls ? " " + cls : ""), title: "Move to another project", "aria-label": `Project ${t.project || "none"}. Move ${t.title} to another project`,
+    onclick: e => { e.stopPropagation(); on.moveProject(t.path); } }, t.project || "—");
 }
 function riskBadge(doc, r) {
   if (!r) return null;
@@ -1544,8 +1551,8 @@ function renderQueue(body, st, on) {
       h(doc, "td", { class: "dpc-num dpc-muted dpc-nowrap" }, handle, " ", String(i + 1)),
       h(doc, "td", {}, urgencyChip(doc, R.urgency && R.urgency[t.path], false)),
       h(doc, "td", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority) || "—")),
-      h(doc, "td", { class: "dpc-title-cell" }, statusPill(doc, st.cfg, t), taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType,
-        t.start && t.start > R.today && M.isStarted(st.cfg, t) ? `planned start ${fmtD(t.start)}` : null, pulled[t.path] && pulled[t.path].kind !== "deferred" ? "added today" : null, R.waiting[t.path] ? `waiting on ${R.waiting[t.path].map(x => x.title).join(", ")} (overdue)` : null].filter(Boolean).join(" · ")),
+      h(doc, "td", { class: "dpc-title-cell" }, statusPill(doc, st.cfg, t), taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, projectButton(doc, t, on), ...[t.workType,
+        t.start && t.start > R.today && M.isStarted(st.cfg, t) ? `planned start ${fmtD(t.start)}` : null, pulled[t.path] && pulled[t.path].kind !== "deferred" ? "added today" : null, R.waiting[t.path] ? `waiting on ${R.waiting[t.path].map(x => x.title).join(", ")} (overdue)` : null].filter(Boolean).map(x => " · " + x)),
         t.checklist ? h(doc, "div", { class: "dpc-muted dpc-sub" }, `${t.checklist.done}/${t.checklist.total} done-when`) : null),
       h(doc, "td", { class: "dpc-nowrap" + (R.risk[t.path] && R.risk[t.path].overdue ? " dpc-warn" : ""), title: t.due ? null : "No due date" }, relDue(t.due, R.today)),
       h(doc, "td", { class: "dpc-num" }, t.type === "milestone" ? "◆" : fmtH(hrs)),
@@ -1802,6 +1809,7 @@ function card(doc, t, st, on, mode, targets) {
   el.addEventListener("dragstart", e => { e.dataTransfer.setData("text/plain", t.path); e.dataTransfer.effectAllowed = "move"; el.classList.add("is-drag"); });
   el.addEventListener("dragend", () => el.classList.remove("is-drag"));
   el.addEventListener("click", e => { if (e.target.closest("button, select, a")) return; on.openTask(t.path); });
+  el.addEventListener("contextmenu", e => { if (!on.taskMenu) return; e.preventDefault(); on.taskMenu(t.path, e); });
   const pct = Math.max(0, Math.min(100, t.progress || 0));
   const hrs = t.estimate != null ? `${fmtH(t.logged).replace("h", "")}/${fmtH(t.estimate)}` : t.logged ? fmtH(t.logged) : null;
   const projColor = (st.projectColors && st.projectColors[t.project]) || "var(--text-faint)";
@@ -1819,7 +1827,9 @@ function card(doc, t, st, on, mode, targets) {
       riskBadge(doc, R.risk[t.path]), !done ? overBadge(doc, R.over && R.over.has(t.path)) : null) : null,
     pct > 0 ? h(doc, "div", { class: "dpc-card-prog", role: "img", "aria-label": `${pct}% done` }, h(doc, "div", { style: `width:${pct}%` })) : null,
     h(doc, "div", { class: "dpc-card-foot" },
-      h(doc, "span", { class: "dpc-chip" }, h(doc, "span", { class: "dpc-dot", style: `background:${projColor}` }), t.project || "—"),
+      on && on.moveProject ? h(doc, "button", { class: "dpc-chip dpc-proj-btn", title: "Move to another project", "aria-label": `Project ${t.project || "none"}. Move ${t.title} to another project`, onclick: e => { e.stopPropagation(); on.moveProject(t.path); } },
+        h(doc, "span", { class: "dpc-dot", style: `background:${projColor}` }), t.project || "—")
+        : h(doc, "span", { class: "dpc-chip" }, h(doc, "span", { class: "dpc-dot", style: `background:${projColor}` }), t.project || "—"),
       t.due ? h(doc, "span", { class: "dpc-card-due" + (overdue ? " dpc-warn" : "") }, fmtD(t.due)) : null),
     h(doc, "div", { class: "dpc-card-actions" }, move,
       done ? h(doc, "button", { class: "dpc-small", onclick: () => on.undoDone(t.path) }, "Undo")
@@ -2338,7 +2348,7 @@ module.exports = { render, typeColor, typeKeys, typeName, fmtH, fmtX };
 
 };
 __mods["./main"] = function(module, exports, require){
-const { Plugin, ItemView, PluginSettingTab, Setting, Notice, TFile, TFolder, Modal, FuzzySuggestModal, Platform, Scope, normalizePath, debounce, parseYaml } = require("obsidian");
+const { Plugin, ItemView, PluginSettingTab, Setting, Notice, TFile, TFolder, Modal, FuzzySuggestModal, Menu, Platform, Scope, normalizePath, debounce, parseYaml } = require("obsidian");
 const M = require("./model");
 const V = require("./views");
 
@@ -2506,6 +2516,8 @@ class CompanionView extends ItemView {
       moveCard: (path, key) => p.moveCard(path, key),
       setBoardMode: m => { p.settings.boardMode = m; p.saveSettings(); this.refresh(); },
       reorderQueue: (id, targetId) => p.reorderQueue(id, targetId),
+      moveProject: path => p.pickProjectFor(path),
+      taskMenu: (path, evt) => p.taskMenu(path, evt),
       resetQueueOrder: () => { p.settings.queueOrder = []; p.saveSettings(); p.recompute(); },
       setDaysGroup: g => { p.settings.daysGroup = g; p.saveSettings(); this.refresh(); },
       setTypesView: m => { p.settings.typesView = m; p.saveSettings(); this.refresh(); },
@@ -2553,6 +2565,11 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.addRibbonIcon("gauge", "dotpm Companion", () => this.activateView());
     this.addCommand({ id: "open", name: "Open view", callback: () => this.activateView() });
     this.addCommand({ id: "open-dotpm", name: "Open dotpm tab", callback: () => this.activateView("dotpm") });
+    this.addCommand({ id: "move-task-to-project", name: "Move task to another project", callback: () => {
+      const f = this.app.workspace.getActiveFile(), here = f && this.tasks.get(f.path);
+      if (here) this.pickProjectFor(f.path);
+      else new TaskSuggestModal(this, t => this.pickProjectFor(t.path), "Move which task?").open();
+    } });
     this.addCommand({ id: "open-today", name: "Open today's queue", callback: () => { this.settings.boardMode = "today"; this.activateView("board"); } });
     this.addCommand({ id: "create-capacity", name: "Create capacity file", callback: () => this.createCapacityFile() });
     this.addCommand({ id: "open-time", name: "Open time spent", callback: () => this.activateView("time") });
@@ -3166,6 +3183,61 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     if (changed && typeof pm.saveSettings === "function") await pm.saveSettings();
   }
 
+  // ---- move a task to another project ----
+  // dotpm's own move (the "Move to project" item in its task menu): it moves the note and its subtasks into the
+  // other project's folder and updates both projects' task lists. The companion never moves files itself.
+  pickProjectFor(path) {
+    const t = this.tasks.get(path);
+    if (!t) return;
+    const pm = this.dotpm();
+    if (!pm || typeof pm.store.moveTaskToProject !== "function") { new Notice("Moving a task needs dotpm enabled: dotpm moves the note and its subtasks."); return; }
+    new ProjectSuggestModal(this, t, proj => this.moveToProject(path, proj.path)).open();
+  }
+  async moveToProject(path, targetPath) {
+    const t = this.tasks.get(path), pm = this.dotpm();
+    if (!t || !pm || typeof pm.store.moveTaskToProject !== "function") return;
+    const ref = pm.index.task(t.id);
+    if (!ref || !ref.projectPath) { new Notice(`dotpm doesn't know which project “${t.title}” is in yet. Try again in a moment.`); return; }
+    if (ref.projectPath === targetPath) return;
+    const [from, to] = [await pm.store.loadProjectByPath(ref.projectPath), await pm.store.loadProjectByPath(targetPath)];
+    if (!from || !to) { new Notice("Couldn't load one of the projects in dotpm."); return; }
+    const toTitle = (this.projectNotes[targetPath] && this.projectNotes[targetPath].title) || to.title || "";
+    const oldProject = t.project, wt = t.workType, cf = { ...(t.customFields || {}) };
+    try { await pm.store.moveTaskToProject(from, to, t.id, null); }
+    catch (e) { console.error("[dotpm-companion] move failed", e); new Notice(`Couldn't move “${t.title}”: ${e.message || e}`); return; }
+    if (typeof pm.refreshViews === "function") pm.refreshViews();
+    new Notice(`Moved “${t.title}” to ${toTitle}.`);
+    // A work type that only came from the old project's name (a quick task filed in Misc gets work type Misc)
+    // follows the move: the new project's name if it is a work type, otherwise you pick one.
+    const fid = this.cfg.workTypeFieldId;
+    if (!fid || !wt || String(oldProject || "").toLowerCase() !== wt.toLowerCase()) return;
+    const named = this.cfg.workTypes.find(x => x.toLowerCase() === toTitle.toLowerCase());
+    // Saved on the destination project object: dotpm's index can still point at the old project for a moment.
+    const setWt = async v => {
+      if (!v || v === wt) return;
+      try { await pm.store.updateTask(to, t.id, { customFields: { ...cf, [fid]: v } }); if (typeof pm.refreshViews === "function") pm.refreshViews(); }
+      catch (e) { console.error("[dotpm-companion] work type after move failed", e); new Notice(`Moved, but couldn't set the work type: ${e.message || e}`); return; }
+      new Notice(`Work type of “${t.title}”: ${wt} → ${v}.`);
+    };
+    if (named) await setWt(named);
+    else new WorkTypeSuggestModal(this, `“${t.title}” had work type ${wt} from ${oldProject}. What is it in ${toTitle}?`, setWt).open();
+  }
+  changeWorkType(path) {
+    const t = this.tasks.get(path), fid = this.cfg.workTypeFieldId;
+    if (!t || !fid) return;
+    new WorkTypeSuggestModal(this, `Work type for “${t.title}” (now ${t.workType || "none"})`, v => this.updateTask(path, { customFields: { ...(t.customFields || {}), [fid]: v } })).open();
+  }
+  taskMenu(path, evt) {
+    const t = this.tasks.get(path);
+    if (!t) return;
+    const m = new Menu();
+    m.addItem(i => i.setTitle("Open task").setIcon("file-text").onClick(() => this.openTask(path)));
+    m.addItem(i => i.setTitle("Move to project…").setIcon("folder-input").onClick(() => this.pickProjectFor(path)));
+    if (this.cfg.workTypeFieldId) m.addItem(i => i.setTitle("Change work type…").setIcon("tag").onClick(() => this.changeWorkType(path)));
+    if (!M.isComplete(this.cfg, t.status)) m.addItem(i => i.setTitle("Log time…").setIcon("clock").onClick(() => new LogTimeModal(this, t).open()));
+    m.showAtMouseEvent(evt);
+  }
+
   // ---- default work-type from the project's name (IDSA, Fun, Misc…) ----
   async applyProjectWorkType(path) {
     if (!this.settings.workTypeFromProject || !this.cfg.workTypeFieldId) return;
@@ -3247,7 +3319,7 @@ module.exports.CompanionView = CompanionView;
 function newId() { return Array.from({ length: 16 }, () => "abcdefghijklmnopqrstuvwxyz0123456789"[Math.floor(Math.random() * 36)]).join(""); }
 
 class TaskSuggestModal extends FuzzySuggestModal {
-  constructor(plugin, onPick) { super(plugin.app); this.plugin = plugin; this.onPick = onPick; this.setPlaceholder("Log time on which task?"); }
+  constructor(plugin, onPick, placeholder) { super(plugin.app); this.plugin = plugin; this.onPick = onPick; this.setPlaceholder(placeholder || "Log time on which task?"); }
   getItems() {
     const R = this.plugin.result, cfg = this.plugin.cfg;
     const open = this.plugin.taskList().filter(t => !M.isComplete(cfg, t.status));
@@ -3256,6 +3328,26 @@ class TaskSuggestModal extends FuzzySuggestModal {
   }
   getItemText(t) { return `${t.title} — ${t.project}`; }
   onChooseItem(t) { this.onPick(t); }
+}
+// Projects shown with their parents ("Studio › Gardening Studio"), the task's own project left out.
+class ProjectSuggestModal extends FuzzySuggestModal {
+  constructor(plugin, task, onPick) { super(plugin.app); this.plugin = plugin; this.task = task; this.onPick = onPick; this.setPlaceholder(`Move “${task.title}” (${task.project || "no project"}) to…`); }
+  label(p) {
+    const notes = this.plugin.projectNotes, parts = [p.title];
+    for (let x = p, n = 0; x && x.parent && n < 6; n++) { x = notes[M.parentPath(x.parent)]; if (x) parts.unshift(x.title); }
+    return parts.join(" › ");
+  }
+  getItems() {
+    return Object.values(this.plugin.projectNotes).filter(p => !p.archived && p.title !== this.task.project).sort((a, b) => this.label(a).localeCompare(this.label(b)));
+  }
+  getItemText(p) { return this.label(p); }
+  onChooseItem(p) { this.onPick(p); }
+}
+class WorkTypeSuggestModal extends FuzzySuggestModal {
+  constructor(plugin, prompt, onPick) { super(plugin.app); this.plugin = plugin; this.onPick = onPick; this.setPlaceholder(prompt); }
+  getItems() { return this.plugin.cfg.workTypes.slice(); }
+  getItemText(k) { return k; }
+  onChooseItem(k) { return this.onPick(k); }
 }
 class FileSuggestModal extends FuzzySuggestModal {
   constructor(plugin, files, onPick) { super(plugin.app); this.files = files; this.onPick = onPick; this.setPlaceholder("Choose a template"); }

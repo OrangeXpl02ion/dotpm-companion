@@ -335,3 +335,8 @@
 .dpc-poptip-head { display: flex; align-items: center; gap: 5px; font-weight: 600; margin-bottom: 4px; }
 .dpc-poptip-row { display: grid; grid-template-columns: 1fr auto; column-gap: 8px; padding: 2px 0; border-top: 1px solid var(--background-modifier-border); }
 .dpc-poptip-row .dpc-sub { grid-column: 1 / -1; }
+/* project name as a button: click to move the task to another project (0.17.0) */
+.dpc-proj-btn { cursor: pointer; background: none; border: none; box-shadow: none; height: auto; min-height: 0; font: inherit; line-height: inherit; border-radius: 4px; padding: 0 2px; margin: 0 -2px; color: inherit; }
+.dpc-proj-btn:hover, .dpc-proj-btn:focus-visible { color: var(--text-normal); background: var(--background-modifier-hover); text-decoration: underline dotted; }
+.dpc-proj-btn:focus-visible { outline: 2px solid var(--interactive-accent); }
+.dpc-chip.dpc-proj-btn { display: inline-flex; align-items: center; gap: 6px; padding: 1px 6px; margin: 0; border: 1px solid var(--background-modifier-border); color: var(--text-muted); }

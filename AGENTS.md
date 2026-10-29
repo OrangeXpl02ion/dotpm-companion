@@ -51,6 +51,7 @@ cut by the workflow.
 | Update a task | `await pm.store.updateTask(project, taskId, patch)` — patch is merged with `Object.assign` (`status`, `priority`, `start`, `due`, `progress`, `timeLogs`, `customFields` (whole object), …). After `start/due/status/dependencies/type` changes call `pm.store.scheduleAfterChange(project, taskId)`. |
 | Create a task | `await pm.store.insertTask(project, taskObject, null)`; task shape mirrors dotpm's `Zu()` factory (see `newTaskObject` in `src/main.js`). |
 | Create a project | `await pm.store.createProject(title, folder, { icon, color, description, parentPath })` → project |
+| Move a task to another project | `await pm.store.moveTaskToProject(fromProject, toProject, taskId, parentId = null)` — dotpm moves the note and its subtasks into the other project's folder and updates both projects' task lists (the same call as its own task-menu *Move to project*). The task's file path changes; the id doesn't. Write follow-ups (work type) with `pm.store.updateTask(toProject, …)`, since dotpm's index can lag. |
 | Redraw dotpm | `pm.refreshViews()` |
 | Open dotpm's task editor | `pm.router.openTask({ filePath })` |
 | Default sort per view | `pm.settings.projectFilters[scopeKey].sort` (scope keys: `vault`, `project:<path>`, `picked:<sorted paths joined by \|>`), then `pm.saveSettings()`. Sortable keys: `title,status,priority,due,assignees,progress`; priority sorts by list index. |
@@ -63,7 +64,7 @@ task in memory otherwise leaves dotpm showing stale values until it reloads.
 
 ## Invariants
 
-- Never rename, move or re-ID dotpm files. Write only fields dotpm defines — one exception: time logs carry `start`/`end`
+- Never rename, move or re-ID dotpm files yourself (moving a task between projects goes through dotpm's `moveTaskToProject`, which moves the files). Write only fields dotpm defines — one exception: time logs carry `start`/`end`
   (`"HH:MM"`) beside dotpm's `date`/`hours`/`note`. dotpm copies log objects whole (`{ ...log }`) and its time panel edits
   fields in place, so they survive its saves. When rewriting `timeLogs`, keep every field already on each log.
 - Every write goes through `updateTask` (one save path).

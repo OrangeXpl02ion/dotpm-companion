@@ -67,7 +67,14 @@ function render(root, st, on) {
 }
 
 function taskLink(doc, t, on) {
-  return h(doc, "a", { class: "dpc-task-link", href: "#", onclick: e => { e.preventDefault(); on.openTask(t.path); } }, t.title);
+  return h(doc, "a", { class: "dpc-task-link", href: "#", onclick: e => { e.preventDefault(); on.openTask(t.path); },
+    oncontextmenu: e => { if (!on.taskMenu) return; e.preventDefault(); on.taskMenu(t.path, e); } }, t.title);
+}
+// The task's project as a button: click to move the task to another project (dotpm moves the note and its subtasks).
+function projectButton(doc, t, on, cls) {
+  if (!on || !on.moveProject) return t.project || "—";
+  return h(doc, "button", { class: "dpc-proj-btn" + (cls ? " " + cls : ""), title: "Move to another project", "aria-label": `Project ${t.project || "none"}. Move ${t.title} to another project`,
+    onclick: e => { e.stopPropagation(); on.moveProject(t.path); } }, t.project || "—");
 }
 function riskBadge(doc, r) {
   if (!r) return null;
@@ -238,8 +245,8 @@ function renderQueue(body, st, on) {
       h(doc, "td", { class: "dpc-num dpc-muted dpc-nowrap" }, handle, " ", String(i + 1)),
       h(doc, "td", {}, urgencyChip(doc, R.urgency && R.urgency[t.path], false)),
       h(doc, "td", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority) || "—")),
-      h(doc, "td", { class: "dpc-title-cell" }, statusPill(doc, st.cfg, t), taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType,
-        t.start && t.start > R.today && M.isStarted(st.cfg, t) ? `planned start ${fmtD(t.start)}` : null, pulled[t.path] && pulled[t.path].kind !== "deferred" ? "added today" : null, R.waiting[t.path] ? `waiting on ${R.waiting[t.path].map(x => x.title).join(", ")} (overdue)` : null].filter(Boolean).join(" · ")),
+      h(doc, "td", { class: "dpc-title-cell" }, statusPill(doc, st.cfg, t), taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, projectButton(doc, t, on), ...[t.workType,
+        t.start && t.start > R.today && M.isStarted(st.cfg, t) ? `planned start ${fmtD(t.start)}` : null, pulled[t.path] && pulled[t.path].kind !== "deferred" ? "added today" : null, R.waiting[t.path] ? `waiting on ${R.waiting[t.path].map(x => x.title).join(", ")} (overdue)` : null].filter(Boolean).map(x => " · " + x)),
         t.checklist ? h(doc, "div", { class: "dpc-muted dpc-sub" }, `${t.checklist.done}/${t.checklist.total} done-when`) : null),
       h(doc, "td", { class: "dpc-nowrap" + (R.risk[t.path] && R.risk[t.path].overdue ? " dpc-warn" : ""), title: t.due ? null : "No due date" }, relDue(t.due, R.today)),
       h(doc, "td", { class: "dpc-num" }, t.type === "milestone" ? "◆" : fmtH(hrs)),
@@ -496,6 +503,7 @@ function card(doc, t, st, on, mode, targets) {
   el.addEventListener("dragstart", e => { e.dataTransfer.setData("text/plain", t.path); e.dataTransfer.effectAllowed = "move"; el.classList.add("is-drag"); });
   el.addEventListener("dragend", () => el.classList.remove("is-drag"));
   el.addEventListener("click", e => { if (e.target.closest("button, select, a")) return; on.openTask(t.path); });
+  el.addEventListener("contextmenu", e => { if (!on.taskMenu) return; e.preventDefault(); on.taskMenu(t.path, e); });
   const pct = Math.max(0, Math.min(100, t.progress || 0));
   const hrs = t.estimate != null ? `${fmtH(t.logged).replace("h", "")}/${fmtH(t.estimate)}` : t.logged ? fmtH(t.logged) : null;
   const projColor = (st.projectColors && st.projectColors[t.project]) || "var(--text-faint)";
@@ -513,7 +521,9 @@ function card(doc, t, st, on, mode, targets) {
       riskBadge(doc, R.risk[t.path]), !done ? overBadge(doc, R.over && R.over.has(t.path)) : null) : null,
     pct > 0 ? h(doc, "div", { class: "dpc-card-prog", role: "img", "aria-label": `${pct}% done` }, h(doc, "div", { style: `width:${pct}%` })) : null,
     h(doc, "div", { class: "dpc-card-foot" },
-      h(doc, "span", { class: "dpc-chip" }, h(doc, "span", { class: "dpc-dot", style: `background:${projColor}` }), t.project || "—"),
+      on && on.moveProject ? h(doc, "button", { class: "dpc-chip dpc-proj-btn", title: "Move to another project", "aria-label": `Project ${t.project || "none"}. Move ${t.title} to another project`, onclick: e => { e.stopPropagation(); on.moveProject(t.path); } },
+        h(doc, "span", { class: "dpc-dot", style: `background:${projColor}` }), t.project || "—")
+        : h(doc, "span", { class: "dpc-chip" }, h(doc, "span", { class: "dpc-dot", style: `background:${projColor}` }), t.project || "—"),
       t.due ? h(doc, "span", { class: "dpc-card-due" + (overdue ? " dpc-warn" : "") }, fmtD(t.due)) : null),
     h(doc, "div", { class: "dpc-card-actions" }, move,
       done ? h(doc, "button", { class: "dpc-small", onclick: () => on.undoDone(t.path) }, "Undo")
