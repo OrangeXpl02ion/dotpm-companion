@@ -127,6 +127,14 @@ function linkTarget(v) {
 }
 function baseName(path) { return path.split("/").pop().replace(/\.md$/, ""); }
 // A task is ready when every dependency that exists in the vault is complete.
+// In Progress / In Review means the work has begun, whatever the planned start date says.
+function isStarted(cfg, t) {
+  if (!t || isComplete(cfg, t.status)) return false;
+  const s = cfg.statuses.find(x => x.id === t.status);
+  return /progress|review/i.test(`${t.status || ""} ${(s && s.label) || ""}`);
+}
+// Planned to start after today and not already started.
+function startsLater(cfg, t, today) { return !!(t.start && t.start > today && !isStarted(cfg, t)); }
 function isReady(t, byName, cfg) { return (t.deps || []).every(d => { const x = byName.get(d); return !x || isComplete(cfg, x.status); }); }
 
 // ---------- multipliers ----------
@@ -362,15 +370,18 @@ function compute(tasks, cfg, settings, today) {
   }
   const byName = new Map(tasks.map(t => [baseName(t.path), t]));
   const urg = urgency(open, byName, cfg, settings, today);
-  // Queue: open, not starting in the future; urgency tier (now, tight, normal), then priority, then due,
-  // then hours left (largest first).
+  // Queue: open and either started (In Progress / In Review) or not starting in the future; urgency tier
+  // (now, tight, normal), then slack, priority, due, hours left (largest first).
   const queue = open
-    .filter(t => !(t.start && t.start > today))
+    .filter(t => !startsLater(cfg, t, today))
     .sort((a, b) => urgencyOrder(cfg, mults, urg)(a, b));
-  const upcoming = open.filter(t => t.start && t.start > today).length;
+  const upcoming = open.filter(t => startsLater(cfg, t, today)).length;
   const ready = t => isReady(t, byName, cfg);
-  // Next tasks you could pull forward: not started yet, dependencies done; least slack first, as the queue.
-  const candidates = open.filter(t => t.start && t.start > today && ready(t)).sort(urgencyOrder(cfg, mults, urg));
+  // Next tasks you could pull forward: not started yet, dependencies done. Anything needed by the end of this
+  // week comes first (due this week, or something due this week waits on it), then least slack.
+  const weekEnd = addDays(mondayOf(today), 6);
+  const candidates = open.filter(t => startsLater(cfg, t, today) && ready(t)).sort(suggestOrder(cfg, mults, urg, weekEnd));
+  for (const t of candidates) { const u = urg[t.path]; if (u) u.thisWeek = !!(u.needBy && u.needBy <= weekEnd); }
   const doneToday = tasks.filter(t => isComplete(cfg, t.status) && t.completed === today).sort((a, b) => a.title.localeCompare(b.title));
   const blocked = new Set(open.filter(t => !ready(t)).map(t => t.path));
   // waiting on an overdue task: an unfinished dependency whose due date has passed
@@ -389,7 +400,7 @@ function compute(tasks, cfg, settings, today) {
     for (const [d, hh] of s) if (d in dayIdx) days[dayIdx[d]].adj += hh;
   }
   const over = new Set(open.filter(t => overBudget(t, mults)).map(t => t.path));
-  return { today, weeks, risk, queue, urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
+  return { today, weekEnd, weeks, risk, queue, urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
     candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg) };
 }
 
@@ -447,8 +458,25 @@ function urgency(open, byName, cfg, settings, today) {
       ux.via = t.path; changed = true;
     }
   }
+  // Needed by: its own due date, or earlier if something due sooner waits on it.
+  for (const t of open) out[t.path].needBy = t.due || null;
+  for (let pass = 0, changed = true; changed && pass < 20; pass++) {
+    changed = false;
+    for (const t of open) for (const d of t.deps || []) {
+      const x = byName.get(d), ux = x && out[x.path], nb = out[t.path].needBy;
+      if (!ux || !nb || (ux.needBy && ux.needBy <= nb)) continue;
+      ux.needBy = nb; ux.needFor = t.path; changed = true;
+    }
+  }
   for (const k in out) out[k].label = TIERS[out[k].tier];
   return out;
+}
+// Suggestions: needed this week first, then the queue's order (tier, slack, priority, …).
+function suggestOrder(cfg, mults, urg, weekEnd) {
+  const base = urgencyOrder(cfg, mults, urg);
+  const wk = t => { const nb = (urg[t.path] || {}).needBy; return nb && nb <= weekEnd ? 0 : 1; };
+  const slack = t => { const v = (urg[t.path] || {}).slack; return typeof v === "number" ? v : Infinity; };
+  return (a, b) => wk(a) - wk(b) || slack(a) - slack(b) || base(a, b);
 }
 function urgencyOrder(cfg, mults, urg) {
   const tier = t => (urg[t.path] || {}).tier ?? 2;
@@ -1087,7 +1115,7 @@ module.exports = {
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,
   readDotpmConfig, isComplete, doneStatusId, priorityRank, label,
   linkText, parseChecklist, checklistProgress, parseTask,
-  typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
+  typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, suggestOrder, isStarted, startsLater, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute, availableOnDay, dayLeftShare, hoursUntil,
   linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek,
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,

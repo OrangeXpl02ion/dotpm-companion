@@ -1,3 +1,4 @@
+import glob
 import asyncio, sys
 from playwright.async_api import async_playwright
 OUT=sys.argv[1]
@@ -31,7 +32,8 @@ cases=[
 ]
 async def main():
   async with async_playwright() as p:
-    b=await p.chromium.launch(executable_path="/opt/pw-browsers/chromium-1194/chrome-linux/chrome")
+    exe=sorted(glob.glob("/opt/pw-browsers/chromium-*/chrome-linux*/chrome"))
+    b=await p.chromium.launch(executable_path=exe[-1] if exe else None)
     pg=await b.new_page(viewport={"width":780,"height":900})
     errs=[]; pg.on("pageerror",lambda e: errs.append(str(e))); pg.on("console",lambda m: errs.append(m.text) if m.type=="error" else None)
     await pg.goto("file:///home/claude/dotpm-companion/test/build/render.html")

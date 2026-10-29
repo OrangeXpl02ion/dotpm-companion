@@ -131,6 +131,14 @@ function linkTarget(v) {
 }
 function baseName(path) { return path.split("/").pop().replace(/\.md$/, ""); }
 // A task is ready when every dependency that exists in the vault is complete.
+// In Progress / In Review means the work has begun, whatever the planned start date says.
+function isStarted(cfg, t) {
+  if (!t || isComplete(cfg, t.status)) return false;
+  const s = cfg.statuses.find(x => x.id === t.status);
+  return /progress|review/i.test(`${t.status || ""} ${(s && s.label) || ""}`);
+}
+// Planned to start after today and not already started.
+function startsLater(cfg, t, today) { return !!(t.start && t.start > today && !isStarted(cfg, t)); }
 function isReady(t, byName, cfg) { return (t.deps || []).every(d => { const x = byName.get(d); return !x || isComplete(cfg, x.status); }); }
 
 // ---------- multipliers ----------
@@ -366,15 +374,18 @@ function compute(tasks, cfg, settings, today) {
   }
   const byName = new Map(tasks.map(t => [baseName(t.path), t]));
   const urg = urgency(open, byName, cfg, settings, today);
-  // Queue: open, not starting in the future; urgency tier (now, tight, normal), then priority, then due,
-  // then hours left (largest first).
+  // Queue: open and either started (In Progress / In Review) or not starting in the future; urgency tier
+  // (now, tight, normal), then slack, priority, due, hours left (largest first).
   const queue = open
-    .filter(t => !(t.start && t.start > today))
+    .filter(t => !startsLater(cfg, t, today))
     .sort((a, b) => urgencyOrder(cfg, mults, urg)(a, b));
-  const upcoming = open.filter(t => t.start && t.start > today).length;
+  const upcoming = open.filter(t => startsLater(cfg, t, today)).length;
   const ready = t => isReady(t, byName, cfg);
-  // Next tasks you could pull forward: not started yet, dependencies done; least slack first, as the queue.
-  const candidates = open.filter(t => t.start && t.start > today && ready(t)).sort(urgencyOrder(cfg, mults, urg));
+  // Next tasks you could pull forward: not started yet, dependencies done. Anything needed by the end of this
+  // week comes first (due this week, or something due this week waits on it), then least slack.
+  const weekEnd = addDays(mondayOf(today), 6);
+  const candidates = open.filter(t => startsLater(cfg, t, today) && ready(t)).sort(suggestOrder(cfg, mults, urg, weekEnd));
+  for (const t of candidates) { const u = urg[t.path]; if (u) u.thisWeek = !!(u.needBy && u.needBy <= weekEnd); }
   const doneToday = tasks.filter(t => isComplete(cfg, t.status) && t.completed === today).sort((a, b) => a.title.localeCompare(b.title));
   const blocked = new Set(open.filter(t => !ready(t)).map(t => t.path));
   // waiting on an overdue task: an unfinished dependency whose due date has passed
@@ -393,7 +404,7 @@ function compute(tasks, cfg, settings, today) {
     for (const [d, hh] of s) if (d in dayIdx) days[dayIdx[d]].adj += hh;
   }
   const over = new Set(open.filter(t => overBudget(t, mults)).map(t => t.path));
-  return { today, weeks, risk, queue, urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
+  return { today, weekEnd, weeks, risk, queue, urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
     candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg) };
 }
 
@@ -451,8 +462,25 @@ function urgency(open, byName, cfg, settings, today) {
       ux.via = t.path; changed = true;
     }
   }
+  // Needed by: its own due date, or earlier if something due sooner waits on it.
+  for (const t of open) out[t.path].needBy = t.due || null;
+  for (let pass = 0, changed = true; changed && pass < 20; pass++) {
+    changed = false;
+    for (const t of open) for (const d of t.deps || []) {
+      const x = byName.get(d), ux = x && out[x.path], nb = out[t.path].needBy;
+      if (!ux || !nb || (ux.needBy && ux.needBy <= nb)) continue;
+      ux.needBy = nb; ux.needFor = t.path; changed = true;
+    }
+  }
   for (const k in out) out[k].label = TIERS[out[k].tier];
   return out;
+}
+// Suggestions: needed this week first, then the queue's order (tier, slack, priority, …).
+function suggestOrder(cfg, mults, urg, weekEnd) {
+  const base = urgencyOrder(cfg, mults, urg);
+  const wk = t => { const nb = (urg[t.path] || {}).needBy; return nb && nb <= weekEnd ? 0 : 1; };
+  const slack = t => { const v = (urg[t.path] || {}).slack; return typeof v === "number" ? v : Infinity; };
+  return (a, b) => wk(a) - wk(b) || slack(a) - slack(b) || base(a, b);
 }
 function urgencyOrder(cfg, mults, urg) {
   const tier = t => (urg[t.path] || {}).tier ?? 2;
@@ -1091,7 +1119,7 @@ module.exports = {
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,
   readDotpmConfig, isComplete, doneStatusId, priorityRank, label,
   linkText, parseChecklist, checklistProgress, parseTask,
-  typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
+  typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, suggestOrder, isStarted, startsLater, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute, availableOnDay, dayLeftShare, hoursUntil,
   linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek,
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,
@@ -1185,6 +1213,12 @@ function urgencyChip(doc, u, compact) {
   const name = ["Now", "Tight", ""][u.tier];
   const tip = u.slack == null ? "No due date" : `${fmtH(u.need)} left with multiplier; ${fmtH(u.need + u.slack)} available before it's due`;
   return h(doc, "span", { class: `dpc-urg dpc-urg-${u.label}`, title: tip }, name ? h(doc, "strong", {}, name) : null, name ? " · " : null, u.reason);
+}
+// Status pill for anything past To Do (In Progress, In Review, Blocked), in dotpm's status color.
+function statusPill(doc, cfg, t) {
+  const s = cfg.statuses.find(x => x.id === t.status);
+  if (!s || t.status === "todo" || /^to ?do$/i.test(s.label || "")) return null;
+  return h(doc, "span", { class: "dpc-status dpc-status-inline", style: `--dpc-sc:${s.color || "var(--text-faint)"}` }, s.label || t.status);
 }
 function byUrgency(st) { return M.urgencyOrder(st.cfg, st.settings.multipliers || {}, (st.result && st.result.urgency) || {}); }
 function overBadge(doc, over) {
@@ -1306,7 +1340,8 @@ function renderQueue(body, st, on) {
       h(doc, "td", { class: "dpc-num dpc-muted" }, String(i + 1)),
       h(doc, "td", {}, urgencyChip(doc, R.urgency && R.urgency[t.path], false)),
       h(doc, "td", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority) || "—")),
-      h(doc, "td", { class: "dpc-title-cell" }, taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType, pulled[t.path] && pulled[t.path].kind !== "deferred" ? "added today" : null, R.waiting[t.path] ? `waiting on ${R.waiting[t.path].map(x => x.title).join(", ")} (overdue)` : null].filter(Boolean).join(" · ")),
+      h(doc, "td", { class: "dpc-title-cell" }, statusPill(doc, st.cfg, t), taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType,
+        t.start && t.start > R.today && M.isStarted(st.cfg, t) ? `planned start ${fmtD(t.start)}` : null, pulled[t.path] && pulled[t.path].kind !== "deferred" ? "added today" : null, R.waiting[t.path] ? `waiting on ${R.waiting[t.path].map(x => x.title).join(", ")} (overdue)` : null].filter(Boolean).join(" · ")),
         t.checklist ? h(doc, "div", { class: "dpc-muted dpc-sub" }, `${t.checklist.done}/${t.checklist.total} done-when`) : null),
       h(doc, "td", { class: "dpc-nowrap" + (R.risk[t.path] && R.risk[t.path].overdue ? " dpc-warn" : ""), title: t.due ? null : "No due date" }, relDue(t.due, R.today)),
       h(doc, "td", { class: "dpc-num" }, t.type === "milestone" ? "◆" : fmtH(hrs)),
@@ -1322,7 +1357,7 @@ function renderQueue(body, st, on) {
   renderDoneToday(body, st, on);
   renderMore(body, st, on, false);
   if (R.upcoming) {
-    const later = st.tasks.filter(t => !M.isComplete(st.cfg, t.status) && t.start && t.start > R.today).sort(byUrgency(st));
+    const later = st.tasks.filter(t => M.startsLater(st.cfg, t, R.today)).sort(byUrgency(st));
     body.append(h(doc, "details", { class: "dpc-details" }, h(doc, "summary", {}, `Starting later (${later.length})`),
       h(doc, "ul", { class: "dpc-list" }, later.map(t => h(doc, "li", {}, h(doc, "span", { class: "dpc-muted dpc-nowrap dpc-start" }, `starts ${fmtD(t.start)}`), taskLink(doc, t, on),
         h(doc, "span", { class: "dpc-muted" }, ` · ${t.project} · `), urgencyChip(doc, R.urgency && R.urgency[t.path], false), " ", riskBadge(doc, R.risk[t.path]))))));
@@ -1366,14 +1401,26 @@ function renderMore(body, st, on, open) {
     h(doc, "span", { "aria-hidden": "true" }, "↻ "), show && !open ? "Hide suggestions" : "Find more tasks");
   body.append(h(doc, "div", { class: "dpc-more" }, open && show ? null : btn));
   if (!show) return;
-  const list = R.candidates.slice(0, 6);
+  const U = R.urgency || {};
+  const week = R.candidates.filter(t => U[t.path] && U[t.path].thisWeek);
+  const list = R.candidates.slice(0, Math.max(6, week.length));
   if (!list.length) { body.append(h(doc, "p", { class: "dpc-muted" }, "No task is ready to pull forward: everything left is waiting on another task.")); return; }
-  body.append(h(doc, "p", { class: "dpc-muted dpc-sub" }, "Ready to start: dependencies done, least slack first. “Start now” moves the start date to today."));
-  body.append(h(doc, "ul", { class: "dpc-list dpc-more-list" }, list.map(t =>
+  body.append(h(doc, "p", { class: "dpc-muted dpc-sub" }, `Ready to start (dependencies done). Needed by ${fmtD(R.weekEnd)} first, then least slack. “Start now” moves the start date to today.`));
+  const item = t =>
     h(doc, "li", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority)), taskLink(doc, t, on),
       h(doc, "span", { class: "dpc-muted" }, ` · ${t.project} · starts ${fmtD(t.start)}${t.estimate ? ` · ${fmtH(M.adjusted(t, st.settings.multipliers))}` : ""} · `),
       urgencyChip(doc, R.urgency && R.urgency[t.path], false),
-      h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.startNow(t.path) }, "Start now")))));
+      U[t.path] && U[t.path].thisWeek && U[t.path].needFor && U[t.path].needBy !== t.due ? h(doc, "span", { class: "dpc-muted" }, ` · needed by ${fmtD(U[t.path].needBy)}`) : null,
+      h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.startNow(t.path) }, "Start now"));
+  const nWeek = list.filter(t => U[t.path] && U[t.path].thisWeek).length;
+  if (nWeek) {
+    body.append(h(doc, "h4", { class: "dpc-h" }, `Needed this week (${nWeek})`));
+    body.append(h(doc, "ul", { class: "dpc-list dpc-more-list" }, list.slice(0, nWeek).map(item)));
+  }
+  if (list.length > nWeek) {
+    if (nWeek) body.append(h(doc, "h4", { class: "dpc-h" }, "Later"));
+    body.append(h(doc, "ul", { class: "dpc-list dpc-more-list" }, list.slice(nWeek).map(item)));
+  }
 }
 
 // ---------- projects (progress tracker, styled after dotpm's project overview) ----------
@@ -1451,7 +1498,7 @@ function renderBoard(body, st, on) {
     h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board view" }, [["today", "Today"], ["week", "By week"]].map(([id, name]) =>
       h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
     h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates."
-      : "Started tasks, most urgent first: Now, Tight, then least slack. Finish them here or pull in more."),
+      : "Started tasks (In Progress, or start date reached), most urgent first: Now, Tight, then least slack."),
     h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.quickAdd(), title: "Quick add a task (command: Quick add task)" }, "+ Quick add")));
   if (mode === "today") { renderQueue(body, st, on); return; }
   const cols = R.board.map(c => ({ ...c, color: c.key === "overdue" ? "var(--dpc-risk)" : c.week && c.week.overloaded ? "var(--dpc-over)" : c.week && c.week.isCurrent ? "var(--interactive-accent, var(--text-accent))" : "var(--text-faint)" }));

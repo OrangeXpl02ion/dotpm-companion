@@ -110,7 +110,7 @@ test("at-risk", () => {
 test("queue order and filters", () => {
   const today = "2026-10-20";
   const R = M.compute(tasks, cfg, settings, today);
-  assert.ok(R.queue.every(t => !t.start || t.start <= today));
+  assert.ok(R.queue.every(t => !t.start || t.start <= today || M.isStarted(cfg, t)), "future starts only if already in progress");
   for (let i = 1; i < R.queue.length; i++) {
     const ta = R.urgency[R.queue[i - 1].path].tier, tb = R.urgency[R.queue[i].path].tier;
     assert.ok(ta <= tb, "urgency tier first");
@@ -459,4 +459,26 @@ test("a log's range is redrawn when its hours are corrected", () => {
   // past midnight
   assert.deepEqual(M.logsToRestamp([{ date: D, hours: 2, start: "23:30", end: "01:30" }], [{ date: D, hours: 1, start: "23:30", end: "01:30" }]), [0]);
   assert.deepEqual(M.stampTimes(2, 14 * 60 + 46), { start: "12:46", end: "14:46" });
+});
+
+test("in-progress tasks stay in the queue; suggestions put this week's work first", () => {
+  const today = "2026-10-28"; // Wednesday; week ends Sun Nov 1
+  const base = { status: "todo", logs: [], logged: 0, workType: "CAD", deps: [], priority: "medium", estimate: 1 };
+  const S = { ...settings, multipliers: { CAD: 1 }, capacity: {}, defaultWeeklyHours: 70, tightPct: 50 };
+  const T = [
+    { ...base, path: "crit.md", title: "crit board", status: "in-progress", start: "2026-11-01", due: "2026-11-03" },
+    { ...base, path: "far.md", title: "far tight", start: "2026-11-02", due: "2026-11-06", estimate: 30 },
+    { ...base, path: "fri.md", title: "due friday", start: "2026-10-29", due: "2026-10-30" },
+    { ...base, path: "up.md", title: "feeds friday", start: "2026-10-29", due: "2026-11-20" },
+    { ...base, path: "fri2.md", title: "friday dependent", start: "2026-10-31", due: "2026-10-31", deps: ["up"] },
+  ];
+  const R = M.compute(T, cfg, S, today);
+  assert.ok(R.queue.some(t => t.title === "crit board"), "in progress shows today despite a later start");
+  assert.ok(!R.candidates.some(t => t.title === "crit board"));
+  assert.equal(R.weekEnd, "2026-11-01");
+  const names = R.candidates.map(t => t.title);
+  assert.ok(names.indexOf("due friday") < names.indexOf("far tight"), "due this week beats less slack later");
+  assert.ok(names.indexOf("feeds friday") < names.indexOf("far tight"), "a task this week waits on counts as this week");
+  assert.equal(R.urgency["up.md"].needBy, "2026-10-31");
+  assert.ok(R.urgency["fri.md"].thisWeek && !R.urgency["far.md"].thisWeek);
 });

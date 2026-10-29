@@ -287,3 +287,4 @@
 .dpc-time-of { font-size: 12px; white-space: nowrap; text-align: right; overflow: hidden; text-overflow: ellipsis; }
 .dpc-time-bad { color: var(--color-red); }
 .dpc-time-sess { font-size: 12px; font-family: var(--font-monospace, ui-monospace, monospace); }
+.dpc-status-inline { margin-right: 6px; vertical-align: 1px; }

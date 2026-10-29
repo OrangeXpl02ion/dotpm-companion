@@ -82,6 +82,12 @@ function urgencyChip(doc, u, compact) {
   const tip = u.slack == null ? "No due date" : `${fmtH(u.need)} left with multiplier; ${fmtH(u.need + u.slack)} available before it's due`;
   return h(doc, "span", { class: `dpc-urg dpc-urg-${u.label}`, title: tip }, name ? h(doc, "strong", {}, name) : null, name ? " · " : null, u.reason);
 }
+// Status pill for anything past To Do (In Progress, In Review, Blocked), in dotpm's status color.
+function statusPill(doc, cfg, t) {
+  const s = cfg.statuses.find(x => x.id === t.status);
+  if (!s || t.status === "todo" || /^to ?do$/i.test(s.label || "")) return null;
+  return h(doc, "span", { class: "dpc-status dpc-status-inline", style: `--dpc-sc:${s.color || "var(--text-faint)"}` }, s.label || t.status);
+}
 function byUrgency(st) { return M.urgencyOrder(st.cfg, st.settings.multipliers || {}, (st.result && st.result.urgency) || {}); }
 function overBadge(doc, over) {
   return over ? h(doc, "span", { class: "dpc-badge dpc-badge-over", title: "Logged time has reached estimate × multiplier. Re-estimate what's left." }, h(doc, "span", { class: "dpc-badge-icon", "aria-hidden": "true" }, "+"), "Over budget") : null;
@@ -202,7 +208,8 @@ function renderQueue(body, st, on) {
       h(doc, "td", { class: "dpc-num dpc-muted" }, String(i + 1)),
       h(doc, "td", {}, urgencyChip(doc, R.urgency && R.urgency[t.path], false)),
       h(doc, "td", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority) || "—")),
-      h(doc, "td", { class: "dpc-title-cell" }, taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType, pulled[t.path] && pulled[t.path].kind !== "deferred" ? "added today" : null, R.waiting[t.path] ? `waiting on ${R.waiting[t.path].map(x => x.title).join(", ")} (overdue)` : null].filter(Boolean).join(" · ")),
+      h(doc, "td", { class: "dpc-title-cell" }, statusPill(doc, st.cfg, t), taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType,
+        t.start && t.start > R.today && M.isStarted(st.cfg, t) ? `planned start ${fmtD(t.start)}` : null, pulled[t.path] && pulled[t.path].kind !== "deferred" ? "added today" : null, R.waiting[t.path] ? `waiting on ${R.waiting[t.path].map(x => x.title).join(", ")} (overdue)` : null].filter(Boolean).join(" · ")),
         t.checklist ? h(doc, "div", { class: "dpc-muted dpc-sub" }, `${t.checklist.done}/${t.checklist.total} done-when`) : null),
       h(doc, "td", { class: "dpc-nowrap" + (R.risk[t.path] && R.risk[t.path].overdue ? " dpc-warn" : ""), title: t.due ? null : "No due date" }, relDue(t.due, R.today)),
       h(doc, "td", { class: "dpc-num" }, t.type === "milestone" ? "◆" : fmtH(hrs)),
@@ -218,7 +225,7 @@ function renderQueue(body, st, on) {
   renderDoneToday(body, st, on);
   renderMore(body, st, on, false);
   if (R.upcoming) {
-    const later = st.tasks.filter(t => !M.isComplete(st.cfg, t.status) && t.start && t.start > R.today).sort(byUrgency(st));
+    const later = st.tasks.filter(t => M.startsLater(st.cfg, t, R.today)).sort(byUrgency(st));
     body.append(h(doc, "details", { class: "dpc-details" }, h(doc, "summary", {}, `Starting later (${later.length})`),
       h(doc, "ul", { class: "dpc-list" }, later.map(t => h(doc, "li", {}, h(doc, "span", { class: "dpc-muted dpc-nowrap dpc-start" }, `starts ${fmtD(t.start)}`), taskLink(doc, t, on),
         h(doc, "span", { class: "dpc-muted" }, ` · ${t.project} · `), urgencyChip(doc, R.urgency && R.urgency[t.path], false), " ", riskBadge(doc, R.risk[t.path]))))));
@@ -262,14 +269,26 @@ function renderMore(body, st, on, open) {
     h(doc, "span", { "aria-hidden": "true" }, "↻ "), show && !open ? "Hide suggestions" : "Find more tasks");
   body.append(h(doc, "div", { class: "dpc-more" }, open && show ? null : btn));
   if (!show) return;
-  const list = R.candidates.slice(0, 6);
+  const U = R.urgency || {};
+  const week = R.candidates.filter(t => U[t.path] && U[t.path].thisWeek);
+  const list = R.candidates.slice(0, Math.max(6, week.length));
   if (!list.length) { body.append(h(doc, "p", { class: "dpc-muted" }, "No task is ready to pull forward: everything left is waiting on another task.")); return; }
-  body.append(h(doc, "p", { class: "dpc-muted dpc-sub" }, "Ready to start: dependencies done, least slack first. “Start now” moves the start date to today."));
-  body.append(h(doc, "ul", { class: "dpc-list dpc-more-list" }, list.map(t =>
+  body.append(h(doc, "p", { class: "dpc-muted dpc-sub" }, `Ready to start (dependencies done). Needed by ${fmtD(R.weekEnd)} first, then least slack. “Start now” moves the start date to today.`));
+  const item = t =>
     h(doc, "li", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority)), taskLink(doc, t, on),
       h(doc, "span", { class: "dpc-muted" }, ` · ${t.project} · starts ${fmtD(t.start)}${t.estimate ? ` · ${fmtH(M.adjusted(t, st.settings.multipliers))}` : ""} · `),
       urgencyChip(doc, R.urgency && R.urgency[t.path], false),
-      h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.startNow(t.path) }, "Start now")))));
+      U[t.path] && U[t.path].thisWeek && U[t.path].needFor && U[t.path].needBy !== t.due ? h(doc, "span", { class: "dpc-muted" }, ` · needed by ${fmtD(U[t.path].needBy)}`) : null,
+      h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.startNow(t.path) }, "Start now"));
+  const nWeek = list.filter(t => U[t.path] && U[t.path].thisWeek).length;
+  if (nWeek) {
+    body.append(h(doc, "h4", { class: "dpc-h" }, `Needed this week (${nWeek})`));
+    body.append(h(doc, "ul", { class: "dpc-list dpc-more-list" }, list.slice(0, nWeek).map(item)));
+  }
+  if (list.length > nWeek) {
+    if (nWeek) body.append(h(doc, "h4", { class: "dpc-h" }, "Later"));
+    body.append(h(doc, "ul", { class: "dpc-list dpc-more-list" }, list.slice(nWeek).map(item)));
+  }
 }
 
 // ---------- projects (progress tracker, styled after dotpm's project overview) ----------
@@ -347,7 +366,7 @@ function renderBoard(body, st, on) {
     h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board view" }, [["today", "Today"], ["week", "By week"]].map(([id, name]) =>
       h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
     h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates."
-      : "Started tasks, most urgent first: Now, Tight, then least slack. Finish them here or pull in more."),
+      : "Started tasks (In Progress, or start date reached), most urgent first: Now, Tight, then least slack."),
     h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.quickAdd(), title: "Quick add a task (command: Quick add task)" }, "+ Quick add")));
   if (mode === "today") { renderQueue(body, st, on); return; }
   const cols = R.board.map(c => ({ ...c, color: c.key === "overdue" ? "var(--dpc-risk)" : c.week && c.week.overloaded ? "var(--dpc-over)" : c.week && c.week.isCurrent ? "var(--interactive-accent, var(--text-accent))" : "var(--text-faint)" }));
