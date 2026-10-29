@@ -188,6 +188,8 @@
 .dpc-days-legend { margin: -4px 0 12px; }
 .dpc-day-hrs { font-size: 0.85em; font-variant-numeric: tabular-nums; }
 .dpc-actions { display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
+/* the cell stays a table cell (display:flex on a <td> pulls it out of the row); the wrapper does the layout */
+.dpc-table td.dpc-actions-cell { width: 1%; text-align: right; }
 /* Projects */
 .dpc-projects { display: flex; flex-direction: column; gap: 12px; }
 .dpc-pcard { margin-left: calc(var(--dpc-depth, 0) * 24px); background: var(--background-primary); border: 1px solid var(--background-modifier-border); border-radius: 10px; padding: 14px 16px 10px; }

@@ -245,11 +245,11 @@ function renderQueue(body, st, on) {
       h(doc, "td", { class: "dpc-num" }, t.type === "milestone" ? "◆" : fmtH(hrs)),
       finishCell(doc, t, p, R.today),
       h(doc, "td", {}, riskBadge(doc, R.risk[t.path]), overBadge(doc, R.over && R.over.has(t.path))),
-      h(doc, "td", { class: "dpc-nowrap dpc-actions" }, pulled[t.path] && pulled[t.path].kind !== "deferred" ? h(doc, "button", { class: "dpc-small dpc-undo-pull", title: `Added today; undo puts it back to ${pulled[t.path].start ? "start " + fmtD(pulled[t.path].start) : "no start date"}`,
+      h(doc, "td", { class: "dpc-nowrap dpc-actions-cell" }, h(doc, "div", { class: "dpc-actions" }, pulled[t.path] && pulled[t.path].kind !== "deferred" ? h(doc, "button", { class: "dpc-small dpc-undo-pull", title: `Added today; undo puts it back to ${pulled[t.path].start ? "start " + fmtD(pulled[t.path].start) : "no start date"}`,
           "aria-label": `Undo adding ${t.title} to the queue`, onclick: () => on.undoStart(t.path) }, "Undo add") : null,
         h(doc, "button", { class: "dpc-small", title: "Log time on this task", "aria-label": `Log time on ${t.title}`, onclick: () => on.logTime(t.path) }, "+h"),
         h(doc, "button", { class: "dpc-small", title: "Move to tomorrow", "aria-label": `Move ${t.title} to tomorrow`, onclick: () => on.notToday(t.path) }, "Not today"),
-        h(doc, "button", { class: "dpc-done", title: t.checklist && t.checklist.done < t.checklist.total ? "Mark done (Done-when not all ticked)" : "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓")));
+        h(doc, "button", { class: "dpc-done", title: t.checklist && t.checklist.done < t.checklist.total ? "Mark done (Done-when not all ticked)" : "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓"))));
     row.addEventListener("dragstart", e => { dragId = t.id; if (e.dataTransfer) { e.dataTransfer.setData("text/plain", t.id); e.dataTransfer.effectAllowed = "move"; } row.classList.add("is-drag"); });
     row.addEventListener("dragend", () => { dragId = null; row.classList.remove("is-drag"); tb.querySelectorAll(".is-drop-above,.is-drop-below").forEach(x => x.classList.remove("is-drop-above", "is-drop-below")); });
     row.addEventListener("dragover", e => {
