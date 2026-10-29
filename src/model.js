@@ -392,13 +392,20 @@ function compute(tasks, cfg, settings, today) {
   }
   // next 7 days: committed hours (× multipliers) per day against that day's share of the week
   const days = [];
-  for (let i = 0; i < 7; i++) { const d = addDays(today, i); days.push({ date: d, adj: 0, byType: {}, byTask: [], available: hoursUntil(settings, d === today ? today : d, d) }); }
+  // raw = estimate − logged (no multiplier), for the Raw estimates toggle
+  for (let i = 0; i < 7; i++) { const d = addDays(today, i); days.push({ date: d, adj: 0, raw: 0, byType: {}, rawByType: {}, byProject: {}, rawByProject: {}, byTask: [], available: hoursUntil(settings, d === today ? today : d, d) }); }
   const dayIdx = Object.fromEntries(days.map((d, i) => [d.date, i]));
   for (const t of open) {
-    const adj = adjusted(t, mults); if (adj <= 0) continue;
-    const s = spread(t, adj, today); if (!s) continue;
-    const k = typeKey(t);
-    for (const [d, hh] of s) if (d in dayIdx) { const x = days[dayIdx[d]]; x.adj += hh; x.byType[k] = (x.byType[k] || 0) + hh; x.byTask.push({ task: t, hours: hh }); }
+    const adj = adjusted(t, mults), raw = remaining(t); if (adj <= 0 && raw <= 0) continue;
+    const s = spread(t, 1, today); if (!s) continue;
+    const k = typeKey(t), pk = t.project || NO_PROJECT;
+    for (const [d, f] of s) if (d in dayIdx) {
+      const x = days[dayIdx[d]], a = adj * f, r = raw * f;
+      x.adj += a; x.raw += r;
+      x.byType[k] = (x.byType[k] || 0) + a; x.rawByType[k] = (x.rawByType[k] || 0) + r;
+      x.byProject[pk] = (x.byProject[pk] || 0) + a; x.rawByProject[pk] = (x.rawByProject[pk] || 0) + r;
+      x.byTask.push({ task: t, hours: a, raw: r });
+    }
   }
   for (const d of days) d.byTask.sort((a, b) => b.hours - a.hours);
   const over = new Set(open.filter(t => overBudget(t, mults)).map(t => t.path));

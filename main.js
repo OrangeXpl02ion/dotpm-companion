@@ -396,13 +396,20 @@ function compute(tasks, cfg, settings, today) {
   }
   // next 7 days: committed hours (× multipliers) per day against that day's share of the week
   const days = [];
-  for (let i = 0; i < 7; i++) { const d = addDays(today, i); days.push({ date: d, adj: 0, byType: {}, byTask: [], available: hoursUntil(settings, d === today ? today : d, d) }); }
+  // raw = estimate − logged (no multiplier), for the Raw estimates toggle
+  for (let i = 0; i < 7; i++) { const d = addDays(today, i); days.push({ date: d, adj: 0, raw: 0, byType: {}, rawByType: {}, byProject: {}, rawByProject: {}, byTask: [], available: hoursUntil(settings, d === today ? today : d, d) }); }
   const dayIdx = Object.fromEntries(days.map((d, i) => [d.date, i]));
   for (const t of open) {
-    const adj = adjusted(t, mults); if (adj <= 0) continue;
-    const s = spread(t, adj, today); if (!s) continue;
-    const k = typeKey(t);
-    for (const [d, hh] of s) if (d in dayIdx) { const x = days[dayIdx[d]]; x.adj += hh; x.byType[k] = (x.byType[k] || 0) + hh; x.byTask.push({ task: t, hours: hh }); }
+    const adj = adjusted(t, mults), raw = remaining(t); if (adj <= 0 && raw <= 0) continue;
+    const s = spread(t, 1, today); if (!s) continue;
+    const k = typeKey(t), pk = t.project || NO_PROJECT;
+    for (const [d, f] of s) if (d in dayIdx) {
+      const x = days[dayIdx[d]], a = adj * f, r = raw * f;
+      x.adj += a; x.raw += r;
+      x.byType[k] = (x.byType[k] || 0) + a; x.rawByType[k] = (x.rawByType[k] || 0) + r;
+      x.byProject[pk] = (x.byProject[pk] || 0) + a; x.rawByProject[pk] = (x.rawByProject[pk] || 0) + r;
+      x.byTask.push({ task: t, hours: a, raw: r });
+    }
   }
   for (const d of days) d.byTask.sort((a, b) => b.hours - a.hours);
   const over = new Set(open.filter(t => overBudget(t, mults)).map(t => t.path));
@@ -1403,7 +1410,7 @@ function renderQueue(body, st, on) {
     renderDoneToday(body, st, on);
     return;
   }
-  renderDays(body, st);
+  renderDays(body, st, on);
   const tb = h(doc, "tbody");
   const pulled = st.settings.pulled || {};
   R.queue.forEach((t, i) => {
@@ -1436,30 +1443,46 @@ function renderQueue(body, st, on) {
   }
 }
 
-function renderDays(body, st) {
+// Next 7 days: committed hours per day, split by work type or project. Height follows the
+// × multipliers / Raw estimates toggle; the dashed line is that day's available hours.
+function renderDays(body, st, on) {
   const doc = body.ownerDocument, R = st.result, cfg = st.cfg;
   if (!R.days || !R.days.length) return;
-  const max = 1.15 * Math.max(1, ...R.days.map(d => Math.max(d.adj, d.available))); // headroom so the available line stays visible
+  const raw = st.mode === "raw", byProj = st.settings.daysGroup === "project";
+  const tot = d => raw ? d.raw || 0 : d.adj;
+  const map = d => (byProj ? (raw ? d.rawByProject : d.byProject) : (raw ? d.rawByType : d.byType)) || {};
+  const projColor = k => (st.projectColors && st.projectColors[k]) || "var(--dpc-none)";
+  const keys = byProj
+    ? [...new Set(R.days.flatMap(d => Object.keys(map(d))))].sort((a, b) => R.days.reduce((x, d) => x + (map(d)[b] || 0), 0) - R.days.reduce((x, d) => x + (map(d)[a] || 0), 0))
+    : typeKeys(cfg);
+  const color = k => byProj ? projColor(k) : typeColor(cfg, k);
+  const name = k => byProj ? (k === M.NO_PROJECT ? "No project" : k) : typeName(k, cfg);
+  const max = 1.15 * Math.max(1, ...R.days.map(d => Math.max(tot(d), d.available))); // headroom so the available line stays visible
   const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  const keys = typeKeys(cfg), present = new Set();
-  body.append(h(doc, "div", { class: "dpc-days", role: "list", "aria-label": "Committed hours for the next 7 days, by work type" }, R.days.map((d, i) => {
-    const over = d.adj > d.available + 0.05;
-    const segs = keys.filter(k => (d.byType && d.byType[k] || 0) > 0.05);
+  const present = new Set();
+  const what = raw ? "raw estimate" : "× multipliers";
+  body.append(h(doc, "div", { class: "dpc-days-head" },
+    h(doc, "span", { class: "dpc-muted" }, `Next 7 days · committed hours (${what})`),
+    h(doc, "div", { class: "dpc-seg dpc-seg-sm", role: "group", "aria-label": "Color day bars by" }, [["type", "Work type"], ["project", "Project"]].map(([id, nm]) =>
+      h(doc, "button", { class: "dpc-seg-btn" + ((byProj ? "project" : "type") === id ? " is-active" : ""), "aria-pressed": (byProj ? "project" : "type") === id, onclick: () => on && on.setDaysGroup && on.setDaysGroup(id) }, nm)))));
+  body.append(h(doc, "div", { class: "dpc-days", role: "list", "aria-label": `Committed hours for the next 7 days (${what}), by ${byProj ? "project" : "work type"}` }, R.days.map((d, i) => {
+    const v0 = tot(d), over = v0 > d.available + 0.05, m = map(d);
+    const segs = keys.filter(k => (m[k] || 0) > 0.05);
     segs.forEach(k => present.add(k));
-    const top = (d.byTask || []).slice(0, 4).map(x => `  ${x.task.title} · ${fmtH(x.hours)}`);
-    const tip = [`${fmtD(d.date)}: ${fmtH(d.adj)} committed (× multipliers), ${fmtH(d.available)} available${over ? ` · over by ${fmtH(d.adj - d.available)}` : ""}`,
-      ...segs.map(k => `${typeName(k, cfg)}: ${fmtH(d.byType[k])}`), top.length ? "Most hours:" : null, ...top].filter(Boolean).join("\n");
+    const top = (d.byTask || []).slice().sort((a, b) => (raw ? b.raw - a.raw : b.hours - a.hours)).slice(0, 4).map(x => `  ${x.task.title} · ${fmtH(raw ? x.raw : x.hours)}`);
+    const tip = [`${fmtD(d.date)}: ${fmtH(v0)} committed (${what}), ${fmtH(d.available)} available${over ? ` · over by ${fmtH(v0 - d.available)}` : ""}`,
+      ...segs.map(k => `${name(k)}: ${fmtH(m[k])}`), top.length ? "Most hours:" : null, ...top].filter(Boolean).join("\n");
     let acc = 0;
     return h(doc, "div", { class: "dpc-day" + (i === 0 ? " is-today" : "") + (over ? " is-over" : ""), role: "listitem", title: tip },
       h(doc, "div", { class: "dpc-day-name" }, i === 0 ? "Today" : DOW[new Date(M.toDay(d.date) * 86400000).getUTCDay()]),
       h(doc, "div", { class: "dpc-day-bar" },
-        segs.map(k => { const v = d.byType[k], el = h(doc, "div", { class: "dpc-day-seg", style: `bottom:${Math.min(100, (acc / max) * 100)}%;height:${Math.max(0, Math.min(100 - (acc / max) * 100, (v / max) * 100))}%;background:${typeColor(cfg, k)}` }); acc += v; return el; }),
+        segs.map(k => { const v = m[k], el = h(doc, "div", { class: "dpc-day-seg", style: `bottom:${Math.min(100, (acc / max) * 100)}%;height:${Math.max(0, Math.min(100 - (acc / max) * 100, (v / max) * 100))}%;background:${color(k)}` }); acc += v; return el; }),
         h(doc, "div", { class: "dpc-day-cap", style: `bottom:${Math.min(100, (d.available / max) * 100)}%` })),
-      h(doc, "div", { class: "dpc-day-hrs" + (over ? " dpc-warn" : "") }, fmtH(d.adj)),
+      h(doc, "div", { class: "dpc-day-hrs" + (over ? " dpc-warn" : "") }, fmtH(v0)),
       h(doc, "div", { class: "dpc-day-avail" }, `of ${fmtH(d.available)}`));
   })));
   body.append(h(doc, "div", { class: "dpc-legend dpc-days-legend" },
-    keys.filter(k => present.has(k)).map(k => h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k, cfg))),
+    keys.filter(k => present.has(k)).map(k => h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${color(k)}` }), name(k))),
     h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), "Hours available that day (from Capacity)")));
 }
 function renderDoneToday(body, st, on) {
@@ -2191,6 +2214,7 @@ const DEFAULTS = {
   showDone: false,
   boardMode: "today",
   typesView: "type",
+  daysGroup: "type",
   weekPlans: {},
   showSubprojects: true,
   undo: {},
@@ -2317,6 +2341,7 @@ class CompanionView extends ItemView {
       openProjectNote: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
       moveCard: (path, key) => p.moveCard(path, key),
       setBoardMode: m => { p.settings.boardMode = m; p.saveSettings(); this.refresh(); },
+      setDaysGroup: g => { p.settings.daysGroup = g; p.saveSettings(); this.refresh(); },
       setTypesView: m => { p.settings.typesView = m; p.saveSettings(); this.refresh(); },
       setSubprojects: v => { p.settings.showSubprojects = !!v; p.saveSettings(); this.refresh(); },
       toggleMore: () => { this.showMore = !this.showMore; this.refresh(); },

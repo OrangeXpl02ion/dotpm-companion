@@ -313,3 +313,7 @@
 .dpc-proj-bar.is-plan > div { opacity: .42; }
 .dpc-proj-nums { white-space: nowrap; text-align: right; }
 @media (max-width: 520px) { .dpc-proj-row { grid-template-columns: 12px 1fr; } .dpc-proj-bars, .dpc-proj-nums { grid-column: 2; } }
+
+.dpc-days-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 4px 0 6px; }
+.dpc-days-head .dpc-seg { margin-left: auto; }
+.dpc-seg-sm .dpc-seg-btn { font-size: 0.85em; padding: 2px 8px; }
