@@ -396,13 +396,15 @@ function compute(tasks, cfg, settings, today) {
   }
   // next 7 days: committed hours (× multipliers) per day against that day's share of the week
   const days = [];
-  for (let i = 0; i < 7; i++) { const d = addDays(today, i); days.push({ date: d, adj: 0, available: hoursUntil(settings, d === today ? today : d, d) }); }
+  for (let i = 0; i < 7; i++) { const d = addDays(today, i); days.push({ date: d, adj: 0, byType: {}, byTask: [], available: hoursUntil(settings, d === today ? today : d, d) }); }
   const dayIdx = Object.fromEntries(days.map((d, i) => [d.date, i]));
   for (const t of open) {
     const adj = adjusted(t, mults); if (adj <= 0) continue;
     const s = spread(t, adj, today); if (!s) continue;
-    for (const [d, hh] of s) if (d in dayIdx) days[dayIdx[d]].adj += hh;
+    const k = typeKey(t);
+    for (const [d, hh] of s) if (d in dayIdx) { const x = days[dayIdx[d]]; x.adj += hh; x.byType[k] = (x.byType[k] || 0) + hh; x.byTask.push({ task: t, hours: hh }); }
   }
+  for (const d of days) d.byTask.sort((a, b) => b.hours - a.hours);
   const over = new Set(open.filter(t => overBudget(t, mults)).map(t => t.path));
   return { today, weekEnd, weeks, risk, queue, urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
     candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg) };
@@ -1067,6 +1069,75 @@ function timeReport(tasks, cfg, mults, from, to, opts) {
   return { from, to, days: days.map(d => byDay[d]), hours, untimed, total, byType, byProject, rows, available,
     elapsed: elapsed.length, average: elapsed.length ? elapsed.reduce((a, d) => a + byDay[d].total, 0) / elapsed.length : 0 };
 }
+// ---------- week projection (planned vs actual) ----------
+// What a week was expected to hold, split by work type, project and task. Three sources, best first:
+// - snapshot: saved the first time the companion runs in a week (hours logged earlier that week + hours
+//   committed from that day on), so later date changes don't rewrite what the week was planned to be;
+// - current: a week still ahead, from today's committed hours (same numbers as Capacity and the Board);
+// - rebuilt: a past week with no snapshot, from each task's estimate × the multiplier then in force,
+//   spread evenly over its current start–due dates.
+function emptyPlan() { return { total: 0, rawTotal: 0, byType: {}, rawByType: {}, byProject: {}, rawByProject: {}, byTask: {} }; }
+function addToPlan(p, t, adj, raw) {
+  if (!(adj > 0) && !(raw > 0)) return;
+  const k = typeKey(t), pk = t.project || NO_PROJECT;
+  p.total += adj; p.rawTotal += raw;
+  p.byType[k] = (p.byType[k] || 0) + adj; p.rawByType[k] = (p.rawByType[k] || 0) + raw;
+  p.byProject[pk] = (p.byProject[pk] || 0) + adj; p.rawByProject[pk] = (p.rawByProject[pk] || 0) + raw;
+  const e = p.byTask[t.path] || (p.byTask[t.path] = { title: t.title, project: t.project || "", type: k, hours: 0, raw: 0 });
+  e.hours += adj; e.raw += raw;
+}
+function isCancelled(cfg, t) { const s = cfg.statuses.find(x => x.id === t.status); return /cancel/i.test(`${t.status || ""} ${(s && s.label) || ""}`); }
+// The current week's plan as it stands today.
+function snapshotWeek(result, tasks, today) {
+  const w = (result.weeks || []).find(x => x.isCurrent); if (!w) return null;
+  const p = emptyPlan();
+  for (const e of w.tasks) addToPlan(p, e.task, e.adj, e.raw);
+  for (const t of tasks) for (const l of t.logs || []) if (l.date >= w.start && l.date < today && l.hours > 0) addToPlan(p, t, l.hours, l.hours);
+  return { week: w.week, taken: today, available: w.weekAvailable != null ? w.weekAvailable : w.available, ...p };
+}
+function rebuildPlan(tasks, cfg, settings, from, to) {
+  const p = emptyPlan(), mults = settings.multipliers || {}, hist = settings.multiplierHistory || [];
+  for (const t of tasks) {
+    if (!(t.estimate > 0) || !t.due || isCancelled(cfg, t)) continue;
+    const a = t.start && t.start <= t.due ? t.start : t.due, b = t.due;
+    if (b < from || a > to) continue;
+    const k = typeKey(t), m = multiplierOn(hist, k, from) || multiplierFor(mults, k);
+    const n = diffDays(a, b) + 1, lo = a > from ? a : from, hi = b < to ? b : to;
+    const share = (diffDays(lo, hi) + 1) / n;
+    addToPlan(p, t, t.estimate * m * share, t.estimate * share);
+  }
+  return p;
+}
+// One week's projection next to what was logged. `plans` is settings.weekPlans (week → snapshot).
+function weekProjection(tasks, cfg, settings, result, from, today) {
+  const to = addDays(from, 6), week = isoWeek(from);
+  const w = (result.weeks || []).find(x => x.week === week);
+  const snap = (settings.weekPlans || {})[week];
+  let source, plan, taken = null;
+  if (snap && from <= today) { source = "snapshot"; plan = snap; taken = snap.taken; }
+  else if (from > today && w) {
+    source = "current"; plan = emptyPlan();
+    for (const e of w.tasks) addToPlan(plan, e.task, e.adj, e.raw);
+  } else if (w && w.isCurrent) { source = "snapshot"; plan = snapshotWeek(result, tasks, today); taken = today; }
+  else { source = "rebuilt"; plan = rebuildPlan(tasks, cfg, settings, from, to); }
+  const available = w ? (w.weekAvailable != null ? w.weekAvailable : w.available) : (snap && snap.available) || 0;
+  const actual = timeReport(tasks, cfg, settings.multipliers || {}, from, to, { capacity: settings.capacity || {}, capacityDays: settings.capacityDays,
+    defaultWeeklyHours: settings.defaultWeeklyHours, today });
+  return { week, from, to, source, taken, plan, available, actual, isCurrent: from <= today && today <= to, isPast: to < today, isFuture: from > today };
+}
+// Keep a snapshot for the current week (first run of the week wins) and the most recent `keep` weeks.
+function recordWeekPlan(settings, result, tasks, today, keep) {
+  const cur = (result.weeks || []).find(x => x.isCurrent);
+  const plans = settings.weekPlans || {};
+  if (!cur || plans[cur.week]) return false;
+  const snap = snapshotWeek(result, tasks, today);
+  if (!snap) return false;
+  plans[cur.week] = snap;
+  const ks = Object.keys(plans).sort();
+  for (const k of ks.slice(0, Math.max(0, ks.length - (keep || 40)))) delete plans[k];
+  settings.weekPlans = plans;
+  return true;
+}
 // Average hours a day over the days before `date` in its week that have time logged (for "vs your average").
 function weekAverageBefore(tasks, date) {
   const mon = mondayOf(date), per = {};
@@ -1127,6 +1198,7 @@ module.exports = {
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,
   parseCapacityDays, parseCapacityInput, describeLog, normClock, fmtClock, dayUsable, dayLabel, adjustmentNote, planAdjustment, addToRules, removeLastFromRules,
   applyCapacityDelta, capacityLogRow,
+  snapshotWeek, rebuildPlan, weekProjection, recordWeekPlan, isCancelled,
 };
 
 };
@@ -1176,7 +1248,7 @@ function typeColor(cfg, k) {
 }
 
 // ---------- shell ----------
-const TABS = [["dotpm", "dotpm"], ["board", "Board"], ["projects", "Projects"], ["capacity", "Capacity"], ["types", "Work types"], ["multipliers", "Multipliers"], ["time", "Time"]];
+const TABS = [["board", "Tasks"], ["dotpm", "dotpm"], ["projects", "Projects"], ["capacity", "Capacity"], ["multipliers", "Multipliers"], ["time", "Time"], ["types", "Week projection"]];
 function render(root, st, on) {
   const doc = root.ownerDocument;
   root.replaceChildren();
@@ -1195,7 +1267,7 @@ function render(root, st, on) {
   if (!st.result) { root.append(h(doc, "p", { class: "dpc-muted" }, "Reading tasks…")); return; }
   const body = h(doc, "div", { class: "dpc-body" });
   root.append(body);
-  ({ board: renderBoard, projects: renderProjects, capacity: renderCapacity, types: renderTypes, multipliers: renderMultipliers, time: renderTime }[st.tab] || renderBoard)(body, st, on);
+  ({ board: renderBoard, projects: renderProjects, capacity: renderCapacity, types: renderProjection, multipliers: renderMultipliers, time: renderTime }[st.tab] || renderBoard)(body, st, on);
 }
 
 function taskLink(doc, t, on) {
@@ -1365,19 +1437,30 @@ function renderQueue(body, st, on) {
 }
 
 function renderDays(body, st) {
-  const doc = body.ownerDocument, R = st.result;
+  const doc = body.ownerDocument, R = st.result, cfg = st.cfg;
   if (!R.days || !R.days.length) return;
   const max = 1.15 * Math.max(1, ...R.days.map(d => Math.max(d.adj, d.available))); // headroom so the available line stays visible
   const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-  body.append(h(doc, "div", { class: "dpc-days", role: "list", "aria-label": "Committed hours for the next 7 days" }, R.days.map((d, i) => {
+  const keys = typeKeys(cfg), present = new Set();
+  body.append(h(doc, "div", { class: "dpc-days", role: "list", "aria-label": "Committed hours for the next 7 days, by work type" }, R.days.map((d, i) => {
     const over = d.adj > d.available + 0.05;
-    return h(doc, "div", { class: "dpc-day" + (i === 0 ? " is-today" : "") + (over ? " is-over" : ""), role: "listitem",
-      title: `${fmtD(d.date)}: ${fmtH(d.adj)} committed (× multipliers) of about ${fmtH(d.available)} available` },
+    const segs = keys.filter(k => (d.byType && d.byType[k] || 0) > 0.05);
+    segs.forEach(k => present.add(k));
+    const top = (d.byTask || []).slice(0, 4).map(x => `  ${x.task.title} · ${fmtH(x.hours)}`);
+    const tip = [`${fmtD(d.date)}: ${fmtH(d.adj)} committed (× multipliers), ${fmtH(d.available)} available${over ? ` · over by ${fmtH(d.adj - d.available)}` : ""}`,
+      ...segs.map(k => `${typeName(k, cfg)}: ${fmtH(d.byType[k])}`), top.length ? "Most hours:" : null, ...top].filter(Boolean).join("\n");
+    let acc = 0;
+    return h(doc, "div", { class: "dpc-day" + (i === 0 ? " is-today" : "") + (over ? " is-over" : ""), role: "listitem", title: tip },
       h(doc, "div", { class: "dpc-day-name" }, i === 0 ? "Today" : DOW[new Date(M.toDay(d.date) * 86400000).getUTCDay()]),
-      h(doc, "div", { class: "dpc-day-bar" }, h(doc, "div", { class: "dpc-day-fill", style: `height:${Math.min(100, (d.adj / max) * 100)}%` }),
+      h(doc, "div", { class: "dpc-day-bar" },
+        segs.map(k => { const v = d.byType[k], el = h(doc, "div", { class: "dpc-day-seg", style: `bottom:${Math.min(100, (acc / max) * 100)}%;height:${Math.max(0, Math.min(100 - (acc / max) * 100, (v / max) * 100))}%;background:${typeColor(cfg, k)}` }); acc += v; return el; }),
         h(doc, "div", { class: "dpc-day-cap", style: `bottom:${Math.min(100, (d.available / max) * 100)}%` })),
-      h(doc, "div", { class: "dpc-day-hrs" }, fmtH(d.adj)));
+      h(doc, "div", { class: "dpc-day-hrs" + (over ? " dpc-warn" : "") }, fmtH(d.adj)),
+      h(doc, "div", { class: "dpc-day-avail" }, `of ${fmtH(d.available)}`));
   })));
+  body.append(h(doc, "div", { class: "dpc-legend dpc-days-legend" },
+    keys.filter(k => present.has(k)).map(k => h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k, cfg))),
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), "Hours available that day (from Capacity)")));
 }
 function renderDoneToday(body, st, on) {
   const doc = body.ownerDocument, R = st.result;
@@ -1560,145 +1643,203 @@ function card(doc, t, st, on, mode, targets) {
 }
 
 // ---------- work types / categories (stacked bars per week) ----------
-function renderTypes(body, st, on) {
-  const doc = body.ownerDocument, set = st.settings;
-  const view = set.typesView === "category" ? "category" : "type";
-  const sub = set.showSubprojects !== false;
-  body.append(h(doc, "div", { class: "dpc-toolbar" },
-    h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Split hours by" }, [["type", "By work type"], ["category", "By category"]].map(([id, name]) =>
-      h(doc, "button", { class: "dpc-seg-btn" + (view === id ? " is-active" : ""), "aria-pressed": view === id, onclick: () => on.setTypesView(id) }, name))),
-    view === "category"
-      ? h(doc, "label", { class: "dpc-check", title: "Split each category into its sub-projects" },
-          h(doc, "input", { type: "checkbox", checked: sub, onchange: e => on.setSubprojects(e.target.checked) }), "Show sub-projects")
-      : null,
-    h(doc, "span", { class: "dpc-muted" }, view === "category"
-      ? (sub ? "Each sub-project is a shade of its category's color." : "One segment per top-level project (Studio, Portfolio, each class…).")
-      : "Committed hours per week by work type.")));
-  if (view === "category") { renderCategories(body, st, on, sub); return; }
-  const cfg = st.cfg, field = st.mode === "raw" ? "rawByType" : "byType";
-  renderStacked(body, st, {
-    keys: typeKeys(cfg), val: (w, k) => w[field][k] || 0,
-    color: k => typeColor(cfg, k), name: k => typeName(k, cfg), what: "work type",
-    legend: present => legend(doc, cfg, present, true),
-  });
+// ---------- week projection: what each week was planned to hold next to the time actually logged ----------
+// One bar pair per week (projected, light; actual, solid), split by work type or top-level project.
+// Pick a week to see the breakdown, the tasks that took the most time and planned work that got no time.
+const PROJ_SRC = {
+  snapshot: w => `Plan frozen ${fmtD(w.taken)} (first time the companion ran that week)`,
+  current: () => "Current plan: hours committed to this week as of today",
+  rebuilt: () => "Rebuilt from task dates: estimate × multiplier then, spread over each task's start–due",
+};
+function projState(st) {
+  const P = st.proj || {};
+  return { view: ["both", "plan", "actual"].includes(P.view) ? P.view : "both", group: P.group === "project" ? "project" : "type", week: P.week };
 }
-
-// Same chart split by project: every sub-project is its own segment, shaded within its category's color
-// (Studio, Portfolio, each class…), so a category reads as one block of related shades.
-function categoryPalette(st) {
-  const R = st.result, field = st.mode === "raw" ? "rawByProject" : "byProject";
-  const used = new Set(R.weeks.flatMap(w => Object.keys(w[field] || {}).filter(k => w[field][k] > 0.05)));
-  // only categories and sub-projects with hours in the range take a color, so shades stay far apart
-  const groups = M.categoryGroups(st.projects || [], [...used])
-    .map(g => ({ ...g, members: g.members.filter(m => used.has(m.key)) })).filter(g => g.members.length);
-  const color = {}, name = {}, group = {};
+function projGroups(st, projs) {
+  const cfg = st.cfg;
+  if (projState(st).group === "type") {
+    const keys = typeKeys(cfg);
+    return { keys, color: k => typeColor(cfg, k), name: k => typeName(k, cfg), of: (m, k) => m[k] || 0, fromType: true };
+  }
+  // top-level categories (Studio, Portfolio, each class…), sub-projects folded in
+  const used = new Set();
+  for (const p of projs) { for (const k of Object.keys(p.plan.byProject || {})) used.add(k); for (const k of Object.keys(p.actual.byProject || {})) used.add(k); }
+  const groups = M.categoryGroups(st.projects || [], [...used]);
+  const top = {}, color = {}, name = {};
   let slot = 0;
   for (const g of groups) {
-    const base = g.key === M.NO_PROJECT || slot >= 8 ? "var(--dpc-none)" : `var(--dpc-s${++slot})`;
-    const n = g.members.length;
-    g.members.forEach((m, j) => {
-      // spread shades from toward the text color (darker in light themes) to toward the background
-      const t = n === 1 ? 0 : -0.3 + (0.85 * j) / (n - 1);
-      const pct = Math.round(Math.abs(t) * 100);
-      color[m.key] = Math.abs(t) < 0.04 ? base
-        : t < 0 ? `color-mix(in oklab, ${base} ${100 - pct}%, var(--text-normal))`
-        : `color-mix(in oklab, ${base} ${100 - pct}%, var(--background-primary))`;
-      name[m.key] = m.own ? `${m.title} (general)` : m.title;
-      group[m.key] = g;
-    });
-    g.base = base;
+    color[g.key] = g.key === M.NO_PROJECT || slot >= 8 ? "var(--dpc-none)" : `var(--dpc-s${++slot})`;
+    name[g.key] = g.key === M.NO_PROJECT ? "No project" : g.title;
+    for (const m of g.members) top[m.key] = g.key;
   }
-  return { groups, color, name, group };
+  const keys = groups.map(g => g.key);
+  const of = (m, k) => Object.entries(m || {}).reduce((a, [pk, v]) => a + ((top[pk] || M.NO_PROJECT) === k ? v : 0), 0);
+  return { keys, color: k => color[k] || "var(--dpc-none)", name: k => name[k] || k, of, fromType: false };
 }
-function renderCategories(body, st, on, sub) {
-  const doc = body.ownerDocument, P = categoryPalette(st);
-  const field = st.mode === "raw" ? "rawByProject" : "byProject";
-  const groupSum = (w, g) => g.members.reduce((a, m) => a + (w[field][m.key] || 0), 0);
-  const byKey = Object.fromEntries(P.groups.map(g => [g.key, g]));
-  const avail = h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), "Available");
-  const o = sub ? {
-    keys: P.groups.flatMap(g => g.members.map(m => m.key)), val: (w, k) => w[field][k] || 0,
-    color: k => P.color[k] || "var(--dpc-none)",
-    name: k => { const g = P.group[k]; const n = P.name[k] || k; return g && g.title !== n && !n.startsWith(g.title + " (") ? `${g.title} › ${n}` : n; },
-    legend: present => h(doc, "div", { class: "dpc-legend dpc-legend-groups" },
-      P.groups.filter(g => g.members.some(m => present.includes(m.key))).map(g =>
-        h(doc, "div", { class: "dpc-legend-group" },
-          h(doc, "span", { class: "dpc-legend-cat" }, h(doc, "span", { class: "dpc-swatch", style: `background:${g.base}` }), g.title),
-          g.members.filter(m => present.includes(m.key) && !(g.members.length === 1 && m.key === g.key)).map(m =>
-            h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${P.color[m.key]}` }), P.name[m.key])))),
-      avail),
-  } : {
-    keys: P.groups.map(g => g.key), val: (w, k) => groupSum(w, byKey[k]),
-    color: k => byKey[k].base, name: k => byKey[k].title,
-    legend: present => h(doc, "div", { class: "dpc-legend" }, present.map(k =>
-      h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${byKey[k].base}` }), byKey[k].title)), avail),
-  };
-  // the table always totals per category; hover a header for its sub-projects
-  o.table = (present, totals) => {
-    const R = st.result;
-    const gs = P.groups.filter(g => g.members.some(m => R.weeks.some(w => (w[field][m.key] || 0) > 0.05)));
-    return h(doc, "table", { class: "dpc-table dpc-types-table" },
-      h(doc, "thead", {}, h(doc, "tr", {}, h(doc, "th", {}, "Week"),
-        gs.map(g => h(doc, "th", { class: "dpc-num", title: g.members.map(m => P.name[m.key]).join(", ") }, g.title)),
-        h(doc, "th", { class: "dpc-num" }, "Total"), h(doc, "th", { class: "dpc-num" }, "Available"))),
-      h(doc, "tbody", {}, R.weeks.map((w, i) => h(doc, "tr", { class: w.isCurrent ? "is-current" : "" }, h(doc, "td", {}, w.week.slice(5)),
-        gs.map(g => { const v = groupSum(w, g); return h(doc, "td", { class: "dpc-num" }, v > 0.05 ? fmtH(v) : ""); }),
-        h(doc, "td", { class: "dpc-num" }, fmtH(totals[i])), h(doc, "td", { class: "dpc-num dpc-muted" }, fmtH(w.available))))));
-  };
-  renderStacked(body, st, { ...o, what: sub ? "project" : "category" });
-}
+function renderProjection(body, st, on) {
+  const doc = body.ownerDocument, R = st.result, cfg = st.cfg, today = R.today, raw = st.mode === "raw";
+  const S = projState(st);
+  const projs = R.weeks.map(w => M.weekProjection(st.tasks, cfg, st.settings, R, w.start, today));
+  if (!projs.length) { body.append(h(doc, "p", { class: "dpc-muted" }, "No weeks in the planning range.")); return; }
+  const G = projGroups(st, projs);
+  const planMap = p => G.fromType ? (raw ? p.plan.rawByType : p.plan.byType) : (raw ? p.plan.rawByProject : p.plan.byProject);
+  const actMap = p => G.fromType ? p.actual.byType : p.actual.byProject;
+  const planOf = (p, k) => G.of(planMap(p) || {}, k), actOf = (p, k) => G.of(actMap(p) || {}, k);
+  const planTotal = p => raw ? p.plan.rawTotal || 0 : p.plan.total || 0;
+  const curIdx = Math.max(0, projs.findIndex(p => p.isCurrent));
+  let sel = projs.findIndex(p => p.from === S.week);
+  if (sel < 0) sel = projs.some(p => p.isCurrent) ? curIdx : projs.length - 1;
+  const P = projs[sel];
+  const seg = (items, cur, fn, aria) => h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": aria },
+    items.map(([id, name]) => h(doc, "button", { class: "dpc-seg-btn" + (cur === id ? " is-active" : ""), "aria-pressed": cur === id, onclick: () => fn(id) }, name)));
+  body.append(h(doc, "div", { class: "dpc-toolbar" },
+    seg([["both", "Side by side"], ["plan", "Projected"], ["actual", "Actual"]], S.view, v => on.setProj({ view: v }), "Show"),
+    seg([["type", "Work type"], ["project", "Project"]], S.group, g => on.setProj({ group: g }), "Split by"),
+    h(doc, "span", { class: "dpc-muted" }, "Projected hours for each week next to the time you logged. Click a week to look back.")));
 
-function renderStacked(body, st, o) {
-  const doc = body.ownerDocument, R = st.result, val = o.val;
-  const present = o.keys.filter(k => R.weeks.some(w => val(w, k) > 0.05));
-  const totals = R.weeks.map(w => present.reduce((a, k) => a + val(w, k), 0));
-  const maxV = Math.max(1, ...totals, ...R.weeks.map(w => w.available));
-  const W = Math.max(320, Math.min(760, (body.clientWidth || 640))), H = 240, padL = 40, padR = 8, padT = 12, padB = 28;
-  const cw = (W - padL - padR) / R.weeks.length, bw = Math.min(44, cw * 0.62);
-  const y = v => padT + (H - padT - padB) * (1 - v / maxV);
-  const step = niceStep(maxV);
-  const svg = s(doc, "svg", { class: "dpc-chart", viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img",
-    "aria-label": `Committed hours per week by ${o.what}, ${st.mode === "raw" ? "raw estimates" : "with multipliers"}` });
-  for (let v = 0; v <= maxV + 0.001; v += step) {
+  // ---- overview chart ----
+  const present = G.keys.filter(k => projs.some(p => (S.view !== "actual" && planOf(p, k) > 0.05) || (S.view !== "plan" && actOf(p, k) > 0.05)));
+  const tot = projs.map(p => ({ plan: present.reduce((a, k) => a + planOf(p, k), 0), act: present.reduce((a, k) => a + actOf(p, k), 0) }));
+  const maxV = Math.max(1, ...tot.map(t => Math.max(S.view === "actual" ? 0 : t.plan, S.view === "plan" ? 0 : t.act)), ...projs.map(p => p.available));
+  const stp = niceStep(maxV), topV = Math.ceil(maxV / stp) * stp;
+  const W = Math.max(320, Math.min(760, body.clientWidth || 640)), H = 230, padL = 40, padR = 8, padT = 12, padB = 30;
+  const cw = (W - padL - padR) / projs.length, both = S.view === "both";
+  const bw = Math.min(both ? 20 : 40, cw * (both ? 0.32 : 0.6)), gap = both ? 3 : 0;
+  const y = v => padT + (H - padT - padB) * (1 - v / topV);
+  const svg = s(doc, "svg", { class: "dpc-chart", viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": "Projected and actual hours per week" });
+  const wrap = h(doc, "div", { class: "dpc-chart-wrap" }), tip = h(doc, "div", { class: "dpc-tip", role: "status" });
+  const hover = (el, text) => {
+    const show = e => { tip.textContent = text; tip.classList.add("is-on"); const r = el.getBoundingClientRect();
+      placeTip(tip, wrap, e && e.clientX != null ? e.clientX : r.right, e && e.clientY != null ? e.clientY : r.top + r.height / 2); };
+    el.addEventListener("mousemove", show); el.addEventListener("focus", show);
+    el.addEventListener("mouseleave", () => tip.classList.remove("is-on")); el.addEventListener("blur", () => tip.classList.remove("is-on"));
+  };
+  for (let v = 0; v <= topV + 1e-9; v += stp) {
     svg.append(s(doc, "line", { x1: padL, x2: W - padR, y1: y(v), y2: y(v), class: v === 0 ? "dpc-axis" : "dpc-grid" }));
-    svg.append(s(doc, "text", { x: padL - 6, y: y(v) + 4, class: "dpc-tick", "text-anchor": "end" }, `${v}h`));
+    svg.append(s(doc, "text", { x: padL - 6, y: y(v) + 4, class: "dpc-tick", "text-anchor": "end" }, `${Math.round(v * 10) / 10}h`));
   }
-  const wrap = h(doc, "div", { class: "dpc-chart-wrap" });
-  const tip = h(doc, "div", { class: "dpc-tip", role: "status" });
-  R.weeks.forEach((w, i) => {
-    const cx = padL + cw * i + cw / 2, x = cx - bw / 2;
+  const stack = (g, x, p, val, kind, label) => {
     let acc = 0;
-    const segs = present.filter(k => val(w, k) > 0.05);
-    segs.forEach((k, j) => {
-      const v = val(w, k), y0 = y(acc), y1 = y(acc + v), top = j === segs.length - 1;
-      const hgt = Math.max(0, y0 - y1 - (j > 0 ? 2 : 0));
-      const yy = y1;
-      const r = top ? Math.min(4, hgt, bw / 2) : 0;
-      const d = `M${x},${yy + hgt} V${yy + r} Q${x},${yy} ${x + r},${yy} H${x + bw - r} Q${x + bw},${yy} ${x + bw},${yy + r} V${yy + hgt} Z`;
-      const seg = s(doc, "path", { d, style: `fill:${o.color(k)}`, class: "dpc-seg-mark", tabindex: 0 });
-      const show = e => {
-        tip.textContent = `${w.week.slice(5)} · ${o.name(k)}: ${fmtH(v)} of ${fmtH(totals[i])}`; tip.classList.add("is-on");
-        const r = seg.getBoundingClientRect();
-        placeTip(tip, wrap, e && e.clientX != null ? e.clientX : r.right, e && e.clientY != null ? e.clientY : r.top + r.height / 2);
-      };
-      seg.addEventListener("mousemove", show); seg.addEventListener("focus", show);
-      seg.addEventListener("mouseleave", () => tip.classList.remove("is-on")); seg.addEventListener("blur", () => tip.classList.remove("is-on"));
-      svg.append(seg);
-      acc += v;
-    });
-    // available hours as a short dashed tick
-    svg.append(s(doc, "line", { x1: x - 4, x2: x + bw + 4, y1: y(w.available), y2: y(w.available), class: "dpc-cap-line" }));
-    svg.append(s(doc, "text", { x: cx, y: H - 10, class: "dpc-tick" + (w.isCurrent ? " is-current" : ""), "text-anchor": "middle" }, w.week.slice(5)));
+    for (const k of present) {
+      const v = val(p, k); if (v < 0.05) continue;
+      const r = s(doc, "rect", { x, width: bw, y: y(acc + v), height: Math.max(0, y(acc) - y(acc + v) - 1), rx: 2, style: `fill:${G.color(k)}`, class: `dpc-seg-mark dpc-proj-${kind}` });
+      hover(r, `${p.week.slice(5)} · ${label} · ${G.name(k)}: ${fmtDur(v)}`);
+      g.append(r); acc += v;
+    }
+  };
+  projs.forEach((p, i) => {
+    const cx = padL + cw * i + cw / 2;
+    const g = s(doc, "g", { class: "dpc-proj-week" + (i === sel ? " is-sel" : ""), tabindex: 0, role: "button", "aria-label": `${p.week}: projected ${fmtH(tot[i].plan)}, actual ${fmtH(tot[i].act)}` });
+    g.append(s(doc, "rect", { x: padL + cw * i + 1, width: cw - 2, y: padT - 6, height: H - padT - padB + 6, rx: 6, class: "dpc-proj-bg" }));
+    const pw = both ? 2 * bw + gap : bw, x0 = cx - pw / 2;
+    if (S.view !== "actual") stack(g, x0, p, planOf, "plan", p.isFuture ? "projected" : "planned");
+    if (S.view !== "plan" && !p.isFuture) stack(g, both ? x0 + bw + gap : x0, p, actOf, "act", "actual");
+    if (p.available > 0) g.append(s(doc, "line", { x1: x0 - 4, x2: x0 + pw + 4, y1: y(p.available), y2: y(p.available), class: "dpc-cap-line" }));
+    g.append(s(doc, "text", { x: cx, y: H - 16, class: "dpc-tick" + (p.isCurrent ? " is-current" : ""), "text-anchor": "middle" }, fmtD(p.from)));
+    g.append(s(doc, "text", { x: cx, y: H - 4, class: "dpc-tick dpc-proj-wk", "text-anchor": "middle" }, p.week.slice(5)));
+    const go = () => on.setProj({ week: p.from });
+    g.addEventListener("click", go); g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+    svg.append(g);
   });
   wrap.append(svg, tip);
-  body.append(o.legend(present), wrap);
-  const t = o.table ? o.table(present, totals) : h(doc, "table", { class: "dpc-table dpc-types-table" },
-    h(doc, "thead", {}, h(doc, "tr", {}, h(doc, "th", {}, "Week"), present.map(k => h(doc, "th", { class: "dpc-num" }, o.name(k))), h(doc, "th", { class: "dpc-num" }, "Total"), h(doc, "th", { class: "dpc-num" }, "Available"))),
-    h(doc, "tbody", {}, R.weeks.map((w, i) => h(doc, "tr", { class: w.isCurrent ? "is-current" : "" }, h(doc, "td", {}, w.week.slice(5)),
-      present.map(k => h(doc, "td", { class: "dpc-num" }, val(w, k) > 0.05 ? fmtH(val(w, k)) : "")),
-      h(doc, "td", { class: "dpc-num" }, fmtH(totals[i])), h(doc, "td", { class: "dpc-num dpc-muted" }, fmtH(w.available))))));
-  body.append(h(doc, "details", { class: "dpc-details" }, h(doc, "summary", {}, "Table"), t));
+  body.append(wrap, h(doc, "div", { class: "dpc-legend" },
+    present.map(k => h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${G.color(k)}` }), G.name(k))),
+    both ? h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch dpc-proj-plan-sw" }), "Projected (left, light)") : null,
+    both ? h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch dpc-proj-act-sw" }), "Actual (right)") : null,
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), "Available")));
+
+  // ---- selected week ----
+  const label = P.isCurrent ? "This week" : P.from === M.addDays(M.mondayOf(today), -7) ? "Last week" : P.from === M.addDays(M.mondayOf(today), 7) ? "Next week" : P.week.slice(5);
+  body.append(h(doc, "div", { class: "dpc-time-top dpc-proj-nav" },
+    h(doc, "div", { class: "dpc-time-nav" },
+      h(doc, "button", { "aria-label": "Previous week", disabled: sel === 0, onclick: () => on.setProj({ week: projs[sel - 1].from }) }, "‹"),
+      h(doc, "span", { class: "dpc-time-label" }, `${label} · ${fmtD(P.from)} – ${fmtD(P.to)}`),
+      h(doc, "button", { "aria-label": "Next week", disabled: sel === projs.length - 1, onclick: () => on.setProj({ week: projs[sel + 1].from }) }, "›"),
+      h(doc, "button", { class: "dpc-small", disabled: P.isCurrent, onclick: () => on.setProj({ week: projs[curIdx].from }) }, "This week")),
+    !P.isFuture && on.openTimeWeek ? h(doc, "button", { class: "dpc-small", onclick: () => on.openTimeWeek(P.from) }, "Days in Time →") : null));
+  const pl = tot[sel].plan, ac = tot[sel].act;
+  // A week in progress is compared with an even pace through the days gone (today counts as half).
+  const gone = P.isCurrent ? (M.diffDays(P.from, today) + 0.5) / 7 : 1;
+  const due = pl * gone, diff = ac - due;
+  const diffTxt = P.isFuture ? "—" : `${diff >= 0 ? "+" : "−"}${fmtDur(Math.abs(diff))}`;
+  const diffSub = P.isFuture ? "week hasn't started" : !(pl > 0.05) ? "nothing was projected"
+    : P.isCurrent ? `vs an even pace (${fmtDur(due)} by today)` : `${Math.round((ac / pl) * 100)}% of planned`;
+  body.append(h(doc, "div", { class: "dpc-tiles dpc-proj-tiles" },
+    tile(doc, P.isFuture ? "Projected" : "Planned", fmtDur(pl), raw ? "raw estimates" : "× multipliers"),
+    tile(doc, P.isCurrent ? "Logged so far" : "Logged", P.isFuture ? "—" : fmtDur(ac), P.isFuture ? "" : `${P.actual.rows.length} task${P.actual.rows.length === 1 ? "" : "s"}`),
+    tile(doc, "Available", fmtH(P.available), P.available > 0 && !P.isFuture ? `${Math.round((ac / P.available) * 100)}% used` : ""),
+    tile(doc, P.isCurrent ? "Pace" : "Difference", diffTxt, diffSub)));
+  body.append(h(doc, "p", { class: "dpc-muted dpc-time-note" }, PROJ_SRC[P.source](P)));
+
+  // projected vs actual per group
+  const rows = G.keys.map(k => ({ k, plan: planOf(P, k), act: actOf(P, k) })).filter(r => r.plan > 0.05 || r.act > 0.05).sort((a, b) => Math.max(b.plan, b.act) - Math.max(a.plan, a.act));
+  body.append(h(doc, "h4", { class: "dpc-h" }, G.fromType ? "By work type" : "By project"));
+  if (!rows.length) body.append(h(doc, "p", { class: "dpc-muted" }, "Nothing planned or logged this week."));
+  else {
+    const mx = Math.max(...rows.map(r => Math.max(r.plan, r.act)));
+    body.append(h(doc, "div", { class: "dpc-proj-rows" }, rows.map(r => {
+      const d = r.act - r.plan;
+      return h(doc, "div", { class: "dpc-proj-row" },
+        h(doc, "span", { class: "dpc-swatch", style: `background:${G.color(r.k)}` }), h(doc, "span", { class: "dpc-time-gname" }, G.name(r.k)),
+        h(doc, "div", { class: "dpc-proj-bars" },
+          h(doc, "div", { class: "dpc-proj-bar is-plan", title: `Projected ${fmtDur(r.plan)}` }, h(doc, "div", { style: `width:${(r.plan / mx) * 100}%;background:${G.color(r.k)}` })),
+          P.isFuture ? null : h(doc, "div", { class: "dpc-proj-bar", title: `Logged ${fmtDur(r.act)}` }, h(doc, "div", { style: `width:${(r.act / mx) * 100}%;background:${G.color(r.k)}` }))),
+        h(doc, "span", { class: "dpc-muted dpc-num dpc-proj-nums" }, P.isFuture ? fmtDur(r.plan)
+          : [`${fmtDur(r.act)} of ${fmtDur(r.plan)}`, " · ", h(doc, "span", { class: d > 0.05 ? "dpc-time-bad" : "" }, Math.abs(d) < 0.05 ? "on plan" : `${d > 0 ? "+" : "−"}${fmtDur(Math.abs(d))}`)]));
+    })));
+  }
+
+  const taskOf = path => st.tasks.find(t => t.path === path);
+  const planned = Object.entries(P.plan.byTask || {}).map(([path, e]) => ({ path, ...e, hrs: raw ? e.raw : e.hours }));
+  if (P.isFuture) {
+    const list = planned.filter(e => e.hrs >= 0.1).sort((a, b) => b.hrs - a.hrs);
+    body.append(h(doc, "h4", { class: "dpc-h" }, `Planned this week (${list.length})`));
+    if (!list.length) { body.append(h(doc, "p", { class: "dpc-muted" }, "No task hours land in this week yet.")); return; }
+    body.append(h(doc, "ul", { class: "dpc-list" }, list.map(e => projTaskItem(doc, st, on, e, taskOf(e.path), `${fmtDur(e.hrs)} this week`))));
+    return;
+  }
+  // tasks that took the most time
+  const top = P.actual.rows.slice(0, 8);
+  body.append(h(doc, "h4", { class: "dpc-h" }, "Took the most time"));
+  if (!top.length) body.append(h(doc, "p", { class: "dpc-muted" }, "No time logged this week."));
+  else {
+    const scale = Math.max(...top.map(r => Math.max(r.here, ((P.plan.byTask || {})[r.task.path] || {}).hours || 0)));
+    body.append(h(doc, "div", { class: "dpc-time-rows" }, top.map(r => {
+      const t = r.task, color = typeColor(cfg, r.type), pe = (P.plan.byTask || {})[t.path], ph = pe ? (raw ? pe.raw : pe.hours) : 0, d = r.here - ph;
+      const vs = ph > 0.05 ? (Math.abs(d) < 0.05 ? "on plan" : `${d > 0 ? "+" : "−"}${fmtDur(Math.abs(d))} vs ${fmtDur(ph)} planned`) : "not planned this week";
+      const overall = r.budget == null ? "no estimate" : r.over ? `task over by ${fmtDur(r.logged - r.budget)}` : r.done ? "finished" : `${fmtDur(r.budget - r.logged)} left on task`;
+      return h(doc, "div", { class: "dpc-time-row" },
+        h(doc, "div", { class: "dpc-time-rtop" },
+          h(doc, "div", { class: "dpc-time-rname" }, taskLink(doc, t, on),
+            h(doc, "div", { class: "dpc-muted dpc-time-meta" }, t.project || "No project", " · ", h(doc, "span", { class: "dpc-swatch", style: `background:${color}` }), typeName(r.type, cfg), ` · ${overall}`)),
+          h(doc, "span", { class: "dpc-time-here dpc-num" }, fmtDur(r.here))),
+        h(doc, "div", { class: "dpc-time-cmp" },
+          h(doc, "div", { class: "dpc-time-track" },
+            h(doc, "div", { class: "dpc-time-fill", style: `left:0;width:${(Math.min(r.here, scale) / scale) * 100}%;background:${color}` }),
+            ph > 0.05 ? h(doc, "div", { class: "dpc-time-tick", style: `left:${(ph / scale) * 100}%`, title: `Planned this week: ${fmtDur(ph)}` }) : null),
+          h(doc, "span", { class: "dpc-muted dpc-num dpc-time-of" }, h(doc, "span", { class: d > 0.05 && ph > 0.05 ? "dpc-time-bad" : "" }, vs))));
+    })));
+    body.append(h(doc, "div", { class: "dpc-legend" },
+      h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-time-sw" }), "logged this week"),
+      h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-time-tick-sw" }), "planned for this week")));
+  }
+  // planned but no time logged
+  const logged = new Set(P.actual.rows.map(r => r.task.path));
+  const missed = planned.filter(e => e.hrs >= 0.25 && !logged.has(e.path)).sort((a, b) => b.hrs - a.hrs);
+  if (missed.length) {
+    body.append(h(doc, "h4", { class: "dpc-h" }, `Planned, no time logged (${missed.length})`));
+    body.append(h(doc, "ul", { class: "dpc-list" }, missed.map(e => {
+      const t = taskOf(e.path);
+      const now = !t ? "task no longer found" : M.isComplete(cfg, t.status) ? "done (no time logged)" : t.due ? `now due ${fmtD(t.due)}` : "no due date now";
+      return projTaskItem(doc, st, on, e, t, `${fmtDur(e.hrs)} planned · ${now}`);
+    })));
+  }
 }
+function projTaskItem(doc, st, on, e, t, note) {
+  return h(doc, "li", {}, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(st.cfg, e.type)}` }),
+    t ? taskLink(doc, t, on) : h(doc, "span", {}, e.title), h(doc, "span", { class: "dpc-muted" }, ` · ${e.project || "No project"} · ${note}`));
+}
+
 // Place a tooltip beside the pointer, inside its wrapper, flipping left near the right edge.
 function placeTip(tip, wrap, clientX, clientY) {
   const b = wrap.getBoundingClientRect();
@@ -2034,7 +2175,7 @@ const DEFAULTS = {
   progressFromChecklist: true,
   multipliers: {},
   multiplierHistory: [],
-  lastTab: "dotpm",
+  lastTab: "board",
   dotpmScope: "",
   dotpmDueSort: true,
   dotpmSortSeen: [],
@@ -2050,6 +2191,7 @@ const DEFAULTS = {
   showDone: false,
   boardMode: "today",
   typesView: "type",
+  weekPlans: {},
   showSubprojects: true,
   undo: {},
   capacityLocal: [],
@@ -2151,6 +2293,7 @@ class CompanionView extends ItemView {
       spill: M.spillover(p.taskList(), p.cfg, M.mondayOf(M.localToday())), projectColors: p.projectColors, dotpmError: this.dotpmError ? String(this.dotpmError.message || this.dotpmError) : null,
       cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity, capacityDays: p.capacityDays || {} }, tasks: p.taskList(), result: p.result,
       time: { mode: p.settings.timeMode, group: p.settings.timeGroup, date: this.timeDate }, today: M.localToday(),
+      proj: { view: p.settings.projView, group: p.settings.projGroup, week: this.proj && this.proj.week },
       nowHours: (() => { const n = new Date(); return n.getHours() + n.getMinutes() / 60; })(), workWindow: p.workWindow || null,
     }, {
       setTab: t => this.switchTab(t),
@@ -2179,6 +2322,14 @@ class CompanionView extends ItemView {
       toggleMore: () => { this.showMore = !this.showMore; this.refresh(); },
       setMultiplier: (k, v) => p.setMultiplier(k, v),
       createCapacity: () => p.createCapacityFile(),
+      openTimeWeek: from => { p.settings.timeMode = "week"; this.timeDate = from > M.mondayOf(M.localToday()) ? null : M.addDays(from, 6) > M.localToday() ? null : M.addDays(from, 6); this.switchTab("time"); },
+      setProj: patch => {
+        this.proj = { ...(this.proj || {}), ...patch };
+        if (patch.view) p.settings.projView = patch.view;
+        if (patch.group) p.settings.projGroup = patch.group;
+        if (patch.view || patch.group) p.saveSettings();
+        this.refresh();
+      },
       setTime: patch => {
         if (patch.mode) p.settings.timeMode = patch.mode;
         if (patch.group) p.settings.timeGroup = patch.group;
@@ -2343,6 +2494,8 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const now = new Date();
     this.result = M.compute(this.taskList(), this.cfg, { ...this.settings, capacity: this.capacity, capacityDays: this.capacityDays || {},
       workWindow: this.workWindow || null, nowHours: now.getHours() + now.getMinutes() / 60 }, today);
+    // Freeze this week's plan the first time it is seen (Week projection compares it with logged time).
+    if (!this.indexing && this.tasks.size && M.recordWeekPlan(this.settings, this.result, this.taskList(), today)) this.saveSettings();
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) if (leaf.view instanceof CompanionView) leaf.view.refresh();
   }
 

@@ -21,7 +21,7 @@ const DEFAULTS = {
   progressFromChecklist: true,
   multipliers: {},
   multiplierHistory: [],
-  lastTab: "dotpm",
+  lastTab: "board",
   dotpmScope: "",
   dotpmDueSort: true,
   dotpmSortSeen: [],
@@ -37,6 +37,7 @@ const DEFAULTS = {
   showDone: false,
   boardMode: "today",
   typesView: "type",
+  weekPlans: {},
   showSubprojects: true,
   undo: {},
   capacityLocal: [],
@@ -138,6 +139,7 @@ class CompanionView extends ItemView {
       spill: M.spillover(p.taskList(), p.cfg, M.mondayOf(M.localToday())), projectColors: p.projectColors, dotpmError: this.dotpmError ? String(this.dotpmError.message || this.dotpmError) : null,
       cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity, capacityDays: p.capacityDays || {} }, tasks: p.taskList(), result: p.result,
       time: { mode: p.settings.timeMode, group: p.settings.timeGroup, date: this.timeDate }, today: M.localToday(),
+      proj: { view: p.settings.projView, group: p.settings.projGroup, week: this.proj && this.proj.week },
       nowHours: (() => { const n = new Date(); return n.getHours() + n.getMinutes() / 60; })(), workWindow: p.workWindow || null,
     }, {
       setTab: t => this.switchTab(t),
@@ -166,6 +168,14 @@ class CompanionView extends ItemView {
       toggleMore: () => { this.showMore = !this.showMore; this.refresh(); },
       setMultiplier: (k, v) => p.setMultiplier(k, v),
       createCapacity: () => p.createCapacityFile(),
+      openTimeWeek: from => { p.settings.timeMode = "week"; this.timeDate = from > M.mondayOf(M.localToday()) ? null : M.addDays(from, 6) > M.localToday() ? null : M.addDays(from, 6); this.switchTab("time"); },
+      setProj: patch => {
+        this.proj = { ...(this.proj || {}), ...patch };
+        if (patch.view) p.settings.projView = patch.view;
+        if (patch.group) p.settings.projGroup = patch.group;
+        if (patch.view || patch.group) p.saveSettings();
+        this.refresh();
+      },
       setTime: patch => {
         if (patch.mode) p.settings.timeMode = patch.mode;
         if (patch.group) p.settings.timeGroup = patch.group;
@@ -330,6 +340,8 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const now = new Date();
     this.result = M.compute(this.taskList(), this.cfg, { ...this.settings, capacity: this.capacity, capacityDays: this.capacityDays || {},
       workWindow: this.workWindow || null, nowHours: now.getHours() + now.getMinutes() / 60 }, today);
+    // Freeze this week's plan the first time it is seen (Week projection compares it with logged time).
+    if (!this.indexing && this.tasks.size && M.recordWeekPlan(this.settings, this.result, this.taskList(), today)) this.saveSettings();
     for (const leaf of this.app.workspace.getLeavesOfType(VIEW_TYPE)) if (leaf.view instanceof CompanionView) leaf.view.refresh();
   }
 

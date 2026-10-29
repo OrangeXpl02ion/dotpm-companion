@@ -392,13 +392,15 @@ function compute(tasks, cfg, settings, today) {
   }
   // next 7 days: committed hours (× multipliers) per day against that day's share of the week
   const days = [];
-  for (let i = 0; i < 7; i++) { const d = addDays(today, i); days.push({ date: d, adj: 0, available: hoursUntil(settings, d === today ? today : d, d) }); }
+  for (let i = 0; i < 7; i++) { const d = addDays(today, i); days.push({ date: d, adj: 0, byType: {}, byTask: [], available: hoursUntil(settings, d === today ? today : d, d) }); }
   const dayIdx = Object.fromEntries(days.map((d, i) => [d.date, i]));
   for (const t of open) {
     const adj = adjusted(t, mults); if (adj <= 0) continue;
     const s = spread(t, adj, today); if (!s) continue;
-    for (const [d, hh] of s) if (d in dayIdx) days[dayIdx[d]].adj += hh;
+    const k = typeKey(t);
+    for (const [d, hh] of s) if (d in dayIdx) { const x = days[dayIdx[d]]; x.adj += hh; x.byType[k] = (x.byType[k] || 0) + hh; x.byTask.push({ task: t, hours: hh }); }
   }
+  for (const d of days) d.byTask.sort((a, b) => b.hours - a.hours);
   const over = new Set(open.filter(t => overBudget(t, mults)).map(t => t.path));
   return { today, weekEnd, weeks, risk, queue, urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
     candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg) };
@@ -1063,6 +1065,75 @@ function timeReport(tasks, cfg, mults, from, to, opts) {
   return { from, to, days: days.map(d => byDay[d]), hours, untimed, total, byType, byProject, rows, available,
     elapsed: elapsed.length, average: elapsed.length ? elapsed.reduce((a, d) => a + byDay[d].total, 0) / elapsed.length : 0 };
 }
+// ---------- week projection (planned vs actual) ----------
+// What a week was expected to hold, split by work type, project and task. Three sources, best first:
+// - snapshot: saved the first time the companion runs in a week (hours logged earlier that week + hours
+//   committed from that day on), so later date changes don't rewrite what the week was planned to be;
+// - current: a week still ahead, from today's committed hours (same numbers as Capacity and the Board);
+// - rebuilt: a past week with no snapshot, from each task's estimate × the multiplier then in force,
+//   spread evenly over its current start–due dates.
+function emptyPlan() { return { total: 0, rawTotal: 0, byType: {}, rawByType: {}, byProject: {}, rawByProject: {}, byTask: {} }; }
+function addToPlan(p, t, adj, raw) {
+  if (!(adj > 0) && !(raw > 0)) return;
+  const k = typeKey(t), pk = t.project || NO_PROJECT;
+  p.total += adj; p.rawTotal += raw;
+  p.byType[k] = (p.byType[k] || 0) + adj; p.rawByType[k] = (p.rawByType[k] || 0) + raw;
+  p.byProject[pk] = (p.byProject[pk] || 0) + adj; p.rawByProject[pk] = (p.rawByProject[pk] || 0) + raw;
+  const e = p.byTask[t.path] || (p.byTask[t.path] = { title: t.title, project: t.project || "", type: k, hours: 0, raw: 0 });
+  e.hours += adj; e.raw += raw;
+}
+function isCancelled(cfg, t) { const s = cfg.statuses.find(x => x.id === t.status); return /cancel/i.test(`${t.status || ""} ${(s && s.label) || ""}`); }
+// The current week's plan as it stands today.
+function snapshotWeek(result, tasks, today) {
+  const w = (result.weeks || []).find(x => x.isCurrent); if (!w) return null;
+  const p = emptyPlan();
+  for (const e of w.tasks) addToPlan(p, e.task, e.adj, e.raw);
+  for (const t of tasks) for (const l of t.logs || []) if (l.date >= w.start && l.date < today && l.hours > 0) addToPlan(p, t, l.hours, l.hours);
+  return { week: w.week, taken: today, available: w.weekAvailable != null ? w.weekAvailable : w.available, ...p };
+}
+function rebuildPlan(tasks, cfg, settings, from, to) {
+  const p = emptyPlan(), mults = settings.multipliers || {}, hist = settings.multiplierHistory || [];
+  for (const t of tasks) {
+    if (!(t.estimate > 0) || !t.due || isCancelled(cfg, t)) continue;
+    const a = t.start && t.start <= t.due ? t.start : t.due, b = t.due;
+    if (b < from || a > to) continue;
+    const k = typeKey(t), m = multiplierOn(hist, k, from) || multiplierFor(mults, k);
+    const n = diffDays(a, b) + 1, lo = a > from ? a : from, hi = b < to ? b : to;
+    const share = (diffDays(lo, hi) + 1) / n;
+    addToPlan(p, t, t.estimate * m * share, t.estimate * share);
+  }
+  return p;
+}
+// One week's projection next to what was logged. `plans` is settings.weekPlans (week → snapshot).
+function weekProjection(tasks, cfg, settings, result, from, today) {
+  const to = addDays(from, 6), week = isoWeek(from);
+  const w = (result.weeks || []).find(x => x.week === week);
+  const snap = (settings.weekPlans || {})[week];
+  let source, plan, taken = null;
+  if (snap && from <= today) { source = "snapshot"; plan = snap; taken = snap.taken; }
+  else if (from > today && w) {
+    source = "current"; plan = emptyPlan();
+    for (const e of w.tasks) addToPlan(plan, e.task, e.adj, e.raw);
+  } else if (w && w.isCurrent) { source = "snapshot"; plan = snapshotWeek(result, tasks, today); taken = today; }
+  else { source = "rebuilt"; plan = rebuildPlan(tasks, cfg, settings, from, to); }
+  const available = w ? (w.weekAvailable != null ? w.weekAvailable : w.available) : (snap && snap.available) || 0;
+  const actual = timeReport(tasks, cfg, settings.multipliers || {}, from, to, { capacity: settings.capacity || {}, capacityDays: settings.capacityDays,
+    defaultWeeklyHours: settings.defaultWeeklyHours, today });
+  return { week, from, to, source, taken, plan, available, actual, isCurrent: from <= today && today <= to, isPast: to < today, isFuture: from > today };
+}
+// Keep a snapshot for the current week (first run of the week wins) and the most recent `keep` weeks.
+function recordWeekPlan(settings, result, tasks, today, keep) {
+  const cur = (result.weeks || []).find(x => x.isCurrent);
+  const plans = settings.weekPlans || {};
+  if (!cur || plans[cur.week]) return false;
+  const snap = snapshotWeek(result, tasks, today);
+  if (!snap) return false;
+  plans[cur.week] = snap;
+  const ks = Object.keys(plans).sort();
+  for (const k of ks.slice(0, Math.max(0, ks.length - (keep || 40)))) delete plans[k];
+  settings.weekPlans = plans;
+  return true;
+}
 // Average hours a day over the days before `date` in its week that have time logged (for "vs your average").
 function weekAverageBefore(tasks, date) {
   const mon = mondayOf(date), per = {};
@@ -1123,4 +1194,5 @@ module.exports = {
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,
   parseCapacityDays, parseCapacityInput, describeLog, normClock, fmtClock, dayUsable, dayLabel, adjustmentNote, planAdjustment, addToRules, removeLastFromRules,
   applyCapacityDelta, capacityLogRow,
+  snapshotWeek, rebuildPlan, weekProjection, recordWeekPlan, isCancelled,
 };

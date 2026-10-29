@@ -482,3 +482,29 @@ test("in-progress tasks stay in the queue; suggestions put this week's work firs
   assert.equal(R.urgency["up.md"].needBy, "2026-10-31");
   assert.ok(R.urgency["fri.md"].thisWeek && !R.urgency["far.md"].thisWeek);
 });
+
+test("week projection: snapshot, current and rebuilt plans, and day breakdown", () => {
+  const today = "2026-10-28";
+  const base = { status: "todo", logs: [], logged: 0, workType: "CAD", deps: [], priority: "medium", project: "Kettle" };
+  const S = { ...settings, multipliers: { CAD: 2 }, multiplierHistory: [], capacity: {}, defaultWeeklyHours: 70, rangeStart: "2026-10-19", rangeEnd: "2026-11-15", weekPlans: {} };
+  const T = [
+    { ...base, path: "past.md", title: "past", status: "done", start: "2026-10-19", due: "2026-10-22", estimate: 4,
+      logs: [{ date: "2026-10-20", hours: 3 }], logged: 3 },
+    { ...base, path: "now.md", title: "now", start: "2026-10-26", due: "2026-10-30", estimate: 5,
+      logs: [{ date: "2026-10-27", hours: 2 }], logged: 2 },
+    { ...base, path: "next.md", title: "next", workType: "Writing", start: "2026-11-02", due: "2026-11-03", estimate: 1 },
+  ];
+  const R = M.compute(T, cfg, S, today);
+  assert.ok(R.days[0].byType.CAD > 0, "day bars carry a work-type split");
+  assert.ok(M.recordWeekPlan(S, R, T, today));
+  assert.equal(M.recordWeekPlan(S, R, T, today), false, "first snapshot of the week wins");
+  const cur = M.weekProjection(T, cfg, S, R, "2026-10-26", today);
+  assert.equal(cur.source, "snapshot");
+  assert.ok(Math.abs(cur.plan.byTask["now.md"].hours - 10) < 1e-9, "logged this week + committed from today = 5 × 2");
+  assert.equal(cur.actual.total, 2);
+  const past = M.weekProjection(T, cfg, S, R, "2026-10-19", today);
+  assert.equal(past.source, "rebuilt");
+  assert.ok(Math.abs(past.plan.total - 8) < 1e-9); assert.equal(past.actual.total, 3);
+  const nxt = M.weekProjection(T, cfg, S, R, "2026-11-02", today);
+  assert.equal(nxt.source, "current"); assert.ok(nxt.plan.byType.Writing > 0);
+});

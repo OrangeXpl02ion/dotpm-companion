@@ -180,7 +180,12 @@
 .dpc-day-bar { position: relative; width: 20px; aspect-ratio: 1 / 5; margin: 6px auto; background: var(--background-modifier-border); border-radius: 4px; overflow: hidden; }
 .dpc-day-fill { position: absolute; left: 0; right: 0; bottom: 0; background: var(--dpc-s1); border-radius: 4px 4px 0 0; }
 .dpc-day.is-over .dpc-day-fill { background: var(--dpc-over); }
-.dpc-day-cap { position: absolute; left: 0; right: 0; border-top: 2px dashed var(--text-muted); }
+.dpc-day-cap { position: absolute; left: -3px; right: -3px; border-top: 2px dashed var(--text-normal); z-index: 1; }
+.dpc-day-bar { overflow: visible; }
+.dpc-day-seg { position: absolute; left: 0; right: 0; border-radius: 2px; box-shadow: 0 1px 0 var(--background-secondary) inset; }
+.dpc-day.is-over .dpc-day-bar { box-shadow: 0 0 0 2px var(--dpc-over); }
+.dpc-day-avail { font-size: 0.75em; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.dpc-days-legend { margin: -4px 0 12px; }
 .dpc-day-hrs { font-size: 0.85em; font-variant-numeric: tabular-nums; }
 .dpc-actions { display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
 /* Projects */
@@ -288,3 +293,23 @@
 .dpc-time-bad { color: var(--color-red); }
 .dpc-time-sess { font-size: 12px; font-family: var(--font-monospace, ui-monospace, monospace); }
 .dpc-status-inline { margin-right: 6px; vertical-align: 1px; }
+
+/* week projection */
+.dpc-proj-week { cursor: pointer; outline: none; }
+.dpc-proj-bg { fill: transparent; }
+.dpc-proj-week:hover .dpc-proj-bg, .dpc-proj-week:focus-visible .dpc-proj-bg { fill: var(--background-modifier-hover); }
+.dpc-proj-week.is-sel .dpc-proj-bg { fill: var(--background-secondary); stroke: var(--interactive-accent, var(--text-accent)); stroke-width: 1; }
+.dpc-proj-plan { opacity: .42; }
+.dpc-proj-wk { font-size: 9px; opacity: .7; }
+.dpc-proj-plan-sw { background: var(--text-muted); opacity: .42; }
+.dpc-proj-act-sw { background: var(--text-muted); }
+.dpc-proj-nav { margin-top: 14px; }
+.dpc-proj-tiles { margin-top: 10px; }
+.dpc-proj-rows { display: grid; gap: 8px; margin-bottom: 8px; }
+.dpc-proj-row { display: grid; grid-template-columns: 12px minmax(90px, 150px) 1fr 190px; gap: 8px; align-items: center; }
+.dpc-proj-bars { display: grid; gap: 3px; }
+.dpc-proj-bar { height: 7px; border-radius: 4px; background: var(--background-modifier-border); overflow: hidden; }
+.dpc-proj-bar > div { height: 100%; border-radius: 4px; }
+.dpc-proj-bar.is-plan > div { opacity: .42; }
+.dpc-proj-nums { white-space: nowrap; text-align: right; }
+@media (max-width: 520px) { .dpc-proj-row { grid-template-columns: 12px 1fr; } .dpc-proj-bars, .dpc-proj-nums { grid-column: 2; } }
