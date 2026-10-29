@@ -372,9 +372,9 @@ function compute(tasks, cfg, settings, today) {
   const urg = urgency(open, byName, cfg, settings, today);
   // Queue: open and either started (In Progress / In Review) or not starting in the future; urgency tier
   // (now, tight, normal), then slack, priority, due, hours left (largest first).
-  const queue = open
-    .filter(t => !startsLater(cfg, t, today))
-    .sort((a, b) => urgencyOrder(cfg, mults, urg)(a, b));
+  // Saved drag order first (settings.queueOrder), new tasks slotted in by urgency.
+  const ordered = queueOrder(open, settings.queueOrder, urgencyOrder(cfg, mults, urg));
+  const queue = ordered.filter(t => !startsLater(cfg, t, today));
   const upcoming = open.filter(t => startsLater(cfg, t, today)).length;
   const ready = t => isReady(t, byName, cfg);
   // Next tasks you could pull forward: not started yet, dependencies done. Anything needed by the end of this
@@ -390,26 +390,29 @@ function compute(tasks, cfg, settings, today) {
     const late = (t.deps || []).map(d => byName.get(d)).filter(x => x && !isComplete(cfg, x.status) && x.due && x.due < today);
     if (late.length) waiting[t.path] = late;
   }
-  // next 7 days: committed hours (× multipliers) per day against that day's share of the week
+  // Queue placement: days filled in queue order (see placeQueue), once with × multipliers and once raw.
+  const loggedToday = tasks.reduce((a, t) => a + (t.logs || []).filter(l => l.date === today).reduce((x, l) => x + l.hours, 0), 0);
+  const placed = placeQueue(ordered, byName, cfg, settings, today, t => adjusted(t, mults), loggedToday);
+  const placedRaw = placeQueue(ordered, byName, cfg, settings, today, remaining, loggedToday);
+  // next 7 days: placed hours per day (× multipliers and raw) against that day's budget
   const days = [];
-  // raw = estimate − logged (no multiplier), for the Raw estimates toggle
-  for (let i = 0; i < 7; i++) { const d = addDays(today, i); days.push({ date: d, adj: 0, raw: 0, byType: {}, rawByType: {}, byProject: {}, rawByProject: {}, byTask: [], available: hoursUntil(settings, d === today ? today : d, d) }); }
-  const dayIdx = Object.fromEntries(days.map((d, i) => [d.date, i]));
-  for (const t of open) {
-    const adj = adjusted(t, mults), raw = remaining(t); if (adj <= 0 && raw <= 0) continue;
-    const s = spread(t, 1, today); if (!s) continue;
-    const k = typeKey(t), pk = t.project || NO_PROJECT;
-    for (const [d, f] of s) if (d in dayIdx) {
-      const x = days[dayIdx[d]], a = adj * f, r = raw * f;
-      x.adj += a; x.raw += r;
-      x.byType[k] = (x.byType[k] || 0) + a; x.rawByType[k] = (x.rawByType[k] || 0) + r;
-      x.byProject[pk] = (x.byProject[pk] || 0) + a; x.rawByProject[pk] = (x.rawByProject[pk] || 0) + r;
-      x.byTask.push({ task: t, hours: a, raw: r });
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(today, i), pa = placed.days[d], pr = placedRaw.days[d];
+    const x = { date: d, adj: 0, raw: 0, byType: {}, rawByType: {}, byProject: {}, rawByProject: {}, byTask: [], rawByTask: [],
+      available: pa ? pa.budget : dayBudget(settings, d, today, loggedToday), open: availableOnDay(cap, d, fallback, settings.capacityDays) * (d === today ? dayLeftShare(d, settings.nowHours, settings.workWindow) : 1) };
+    for (const [src, tot, bt, bp, list] of [[pa, "adj", "byType", "byProject", "byTask"], [pr, "raw", "rawByType", "rawByProject", "rawByTask"]]) {
+      for (const e of (src && src.byTask) || []) {
+        const k = typeKey(e.task), pk = e.task.project || NO_PROJECT;
+        x[tot] += e.hours; x[bt][k] = (x[bt][k] || 0) + e.hours; x[bp][pk] = (x[bp][pk] || 0) + e.hours;
+        x[list].push({ task: e.task, hours: e.hours });
+      }
+      x[list].sort((a, b) => b.hours - a.hours);
     }
+    days.push(x);
   }
-  for (const d of days) d.byTask.sort((a, b) => b.hours - a.hours);
   const over = new Set(open.filter(t => overBudget(t, mults)).map(t => t.path));
-  return { today, weekEnd, weeks, risk, queue, urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
+  return { today, weekEnd, weeks, risk, queue, order: ordered.map(t => t.id), placed: placed.tasks, placedRaw: placedRaw.tasks,
+    workShare: typeof settings.workSharePct === "number" ? settings.workSharePct : 100, worked: workedShare(tasks, settings, today, 14), urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
     candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg) };
 }
 
@@ -524,6 +527,98 @@ function shiftToWeek(t, weekStart) {
   const out = { due: addDays(t.due, shift) };
   if (t.start) out.start = addDays(t.start, shift);
   return out;
+}
+
+// ---------- queue order and placement ----------
+// The queue's order: task ids saved in settings.queueOrder (set by dragging in the Today queue). Tasks not in
+// that list (new, or never dragged) slot in by urgency order: each goes just before the first saved task the
+// urgency order would put after it. No saved order → plain urgency order.
+function queueOrder(open, saved, cmp) {
+  const pos = new Map((saved || []).map((id, i) => [String(id), i]));
+  const known = open.filter(t => pos.has(t.id)).sort((a, b) => pos.get(a.id) - pos.get(b.id));
+  const rest = open.filter(t => !pos.has(t.id)).sort(cmp);
+  if (!known.length) return rest;
+  const out = known.slice();
+  for (const t of rest) {
+    let i = out.findIndex(x => pos.has(x.id) && cmp(t, x) < 0);
+    if (i === -1) i = out.length;
+    out.splice(i, 0, t);
+  }
+  return out;
+}
+// New saved order after dragging `id` onto `targetId` (before it when moving up, after it when moving down).
+function moveInOrder(ids, id, targetId) {
+  const from = ids.indexOf(id), to = ids.indexOf(targetId);
+  if (from === -1 || to === -1 || from === to) return ids.slice();
+  const out = ids.slice(); out.splice(from, 1);
+  const at = out.indexOf(targetId) + (from < to ? 1 : 0);
+  out.splice(at, 0, id);
+  return out;
+}
+// Hours a day can hold: its open hours (Capacity) × the share of open time you actually work (settings
+// workSharePct). Today: that minus what's already logged today, and never more than the part of today's work
+// window still ahead.
+function dayBudget(settings, date, today, loggedToday) {
+  const cap = settings.capacity || {}, open = availableOnDay(cap, date, settings.defaultWeeklyHours, settings.capacityDays);
+  const share = Math.max(0, (typeof settings.workSharePct === "number" ? settings.workSharePct : 100) / 100);
+  if (date !== today) return open * share;
+  return Math.max(0, Math.min(open * share - (loggedToday || 0), open * dayLeftShare(date, settings.nowHours, settings.workWindow)));
+}
+// Fill days in queue order: each task takes what's left of each day's budget from its earliest day until its
+// hours are placed, so a task lower in the queue lands later, and a big task spills into the next days.
+// Earliest day: today, its start date if it hasn't been started, and the projected finish of any open task it
+// depends on (a dependency lower in the queue is placed first). Milestones take no hours.
+// hoursOf(t) picks × multipliers or raw. Gives per task { start, finish (null = not placed by `limit`), segs,
+// late (projected to finish after its due date) } and per day { date, budget, hours, byTask }.
+function placeQueue(ordered, byName, cfg, settings, today, hoursOf, loggedToday) {
+  const limit = addDays(settings.rangeEnd && settings.rangeEnd > today ? settings.rangeEnd : today, 90);
+  const isOpen = new Set(ordered.map(t => t.path));
+  const left = {}, days = {};
+  const dayOf = d => days[d] || (days[d] = { date: d, budget: dayBudget(settings, d, today, loggedToday), hours: 0, byTask: [] });
+  const room = d => { if (!(d in left)) left[d] = dayOf(d).budget; return left[d]; };
+  const tasks = {};
+  const place = (t, stack) => {
+    if (tasks[t.path]) return tasks[t.path];
+    if (stack.has(t.path)) return null; // dependency loop: ignore the back edge
+    stack.add(t.path);
+    let from = t.start && t.start > today && !isStarted(cfg, t) ? t.start : today, blocked = false;
+    for (const d of t.deps || []) {
+      const x = byName.get(d);
+      if (!x || !isOpen.has(x.path)) continue;
+      const px = place(x, stack);
+      if (!px) continue;
+      if (px.finish == null) blocked = true; else if (px.finish > from) from = px.finish;
+    }
+    const need = t.type === "milestone" ? 0 : Math.max(0, hoursOf(t) || 0);
+    const segs = [];
+    let rest = need;
+    if (!blocked) for (let d = from; rest > 1e-6 && d <= limit; d = addDays(d, 1)) {
+      const r = room(d);
+      if (r <= 1e-6) continue;
+      const take = Math.min(r, rest);
+      left[d] = r - take; rest -= take; segs.push([d, take]);
+      const day = dayOf(d); day.hours += take; day.byTask.push({ task: t, hours: take });
+    }
+    const finish = blocked || rest > 1e-6 ? null : segs.length ? segs[segs.length - 1][0] : from;
+    const res = { start: segs.length ? segs[0][0] : from, finish, segs, hours: need,
+      late: !!(t.due && t.due >= today && (finish == null || finish > t.due)) };
+    tasks[t.path] = res;
+    return res;
+  };
+  for (const t of ordered) place(t, new Set());
+  return { tasks, days };
+}
+// Share of open time actually logged over the `n` days before today (days with a Capacity entry only).
+function workedShare(tasks, settings, today, n) {
+  let open = 0, logged = 0;
+  const from = addDays(today, -(n || 14));
+  const cap = settings.capacity || {}, cd = settings.capacityDays || {}, counted = new Set();
+  for (let d = from; d < today; d = addDays(d, 1)) {
+    if (!(d in cd) && !(isoWeek(d) in cap)) continue; // before the planning range: no open hours to compare with
+    open += availableOnDay(cap, d, settings.defaultWeeklyHours, cd); counted.add(d);
+  }
+  for (const t of tasks) for (const l of t.logs || []) if (counted.has(l.date)) logged += l.hours;
+  return open > 0 ? { share: logged / open, logged, open, from: [...counted].sort()[0] } : null;
 }
 
 
@@ -1195,7 +1290,7 @@ module.exports = {
   linkText, parseChecklist, checklistProgress, parseTask,
   typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, suggestOrder, isStarted, startsLater, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute, availableOnDay, dayLeftShare, hoursUntil,
-  linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek,
+  linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek, queueOrder, moveInOrder, dayBudget, placeQueue, workedShare,
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,
   dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,

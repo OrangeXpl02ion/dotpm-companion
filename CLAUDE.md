@@ -12,7 +12,7 @@ projects. dotpm owns the data (Markdown notes with frontmatter); the companion r
 
 | Path | Role |
 | --- | --- |
-| `src/model.js` | Pure logic, no Obsidian imports: date helpers, dotpm config, task parsing, capacity/spread/at-risk, queue, board, multipliers + history + measured series, project stats, time spent per day/week (`timeReport`), quick-add, quick-capacity and time-log parsing, Capacity.md / rules-file edits, schedule/spillover rows, templates, file fallbacks. Unit-tested. |
+| `src/model.js` | Pure logic, no Obsidian imports: date helpers, dotpm config, task parsing, capacity/spread/at-risk, queue (saved drag order `queueOrder` + `placeQueue`: days filled in order at `workSharePct` of open hours), board, multipliers + history + measured series, project stats, time spent per day/week (`timeReport`), quick-add, quick-capacity and time-log parsing, Capacity.md / rules-file edits, schedule/spillover rows, templates, file fallbacks. Unit-tested. |
 | `src/views.js` | Plain-DOM rendering of every tab (`render(root, state, handlers)`). No Obsidian helpers, so it renders in a browser for tests. |
 | `src/main.js` | Obsidian glue: plugin class, `CompanionView` (an `ItemView`), dotpm bridge, indexing, commands, modals, settings tab, logs. |
 | `styles.css` | All styles, scoped under `.dpc-root` / `.dpc-*`; colors via Obsidian CSS variables and `--dpc-s1…s9`. |

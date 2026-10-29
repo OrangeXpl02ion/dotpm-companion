@@ -376,9 +376,9 @@ function compute(tasks, cfg, settings, today) {
   const urg = urgency(open, byName, cfg, settings, today);
   // Queue: open and either started (In Progress / In Review) or not starting in the future; urgency tier
   // (now, tight, normal), then slack, priority, due, hours left (largest first).
-  const queue = open
-    .filter(t => !startsLater(cfg, t, today))
-    .sort((a, b) => urgencyOrder(cfg, mults, urg)(a, b));
+  // Saved drag order first (settings.queueOrder), new tasks slotted in by urgency.
+  const ordered = queueOrder(open, settings.queueOrder, urgencyOrder(cfg, mults, urg));
+  const queue = ordered.filter(t => !startsLater(cfg, t, today));
   const upcoming = open.filter(t => startsLater(cfg, t, today)).length;
   const ready = t => isReady(t, byName, cfg);
   // Next tasks you could pull forward: not started yet, dependencies done. Anything needed by the end of this
@@ -394,26 +394,29 @@ function compute(tasks, cfg, settings, today) {
     const late = (t.deps || []).map(d => byName.get(d)).filter(x => x && !isComplete(cfg, x.status) && x.due && x.due < today);
     if (late.length) waiting[t.path] = late;
   }
-  // next 7 days: committed hours (× multipliers) per day against that day's share of the week
+  // Queue placement: days filled in queue order (see placeQueue), once with × multipliers and once raw.
+  const loggedToday = tasks.reduce((a, t) => a + (t.logs || []).filter(l => l.date === today).reduce((x, l) => x + l.hours, 0), 0);
+  const placed = placeQueue(ordered, byName, cfg, settings, today, t => adjusted(t, mults), loggedToday);
+  const placedRaw = placeQueue(ordered, byName, cfg, settings, today, remaining, loggedToday);
+  // next 7 days: placed hours per day (× multipliers and raw) against that day's budget
   const days = [];
-  // raw = estimate − logged (no multiplier), for the Raw estimates toggle
-  for (let i = 0; i < 7; i++) { const d = addDays(today, i); days.push({ date: d, adj: 0, raw: 0, byType: {}, rawByType: {}, byProject: {}, rawByProject: {}, byTask: [], available: hoursUntil(settings, d === today ? today : d, d) }); }
-  const dayIdx = Object.fromEntries(days.map((d, i) => [d.date, i]));
-  for (const t of open) {
-    const adj = adjusted(t, mults), raw = remaining(t); if (adj <= 0 && raw <= 0) continue;
-    const s = spread(t, 1, today); if (!s) continue;
-    const k = typeKey(t), pk = t.project || NO_PROJECT;
-    for (const [d, f] of s) if (d in dayIdx) {
-      const x = days[dayIdx[d]], a = adj * f, r = raw * f;
-      x.adj += a; x.raw += r;
-      x.byType[k] = (x.byType[k] || 0) + a; x.rawByType[k] = (x.rawByType[k] || 0) + r;
-      x.byProject[pk] = (x.byProject[pk] || 0) + a; x.rawByProject[pk] = (x.rawByProject[pk] || 0) + r;
-      x.byTask.push({ task: t, hours: a, raw: r });
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(today, i), pa = placed.days[d], pr = placedRaw.days[d];
+    const x = { date: d, adj: 0, raw: 0, byType: {}, rawByType: {}, byProject: {}, rawByProject: {}, byTask: [], rawByTask: [],
+      available: pa ? pa.budget : dayBudget(settings, d, today, loggedToday), open: availableOnDay(cap, d, fallback, settings.capacityDays) * (d === today ? dayLeftShare(d, settings.nowHours, settings.workWindow) : 1) };
+    for (const [src, tot, bt, bp, list] of [[pa, "adj", "byType", "byProject", "byTask"], [pr, "raw", "rawByType", "rawByProject", "rawByTask"]]) {
+      for (const e of (src && src.byTask) || []) {
+        const k = typeKey(e.task), pk = e.task.project || NO_PROJECT;
+        x[tot] += e.hours; x[bt][k] = (x[bt][k] || 0) + e.hours; x[bp][pk] = (x[bp][pk] || 0) + e.hours;
+        x[list].push({ task: e.task, hours: e.hours });
+      }
+      x[list].sort((a, b) => b.hours - a.hours);
     }
+    days.push(x);
   }
-  for (const d of days) d.byTask.sort((a, b) => b.hours - a.hours);
   const over = new Set(open.filter(t => overBudget(t, mults)).map(t => t.path));
-  return { today, weekEnd, weeks, risk, queue, urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
+  return { today, weekEnd, weeks, risk, queue, order: ordered.map(t => t.id), placed: placed.tasks, placedRaw: placedRaw.tasks,
+    workShare: typeof settings.workSharePct === "number" ? settings.workSharePct : 100, worked: workedShare(tasks, settings, today, 14), urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
     candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg) };
 }
 
@@ -528,6 +531,98 @@ function shiftToWeek(t, weekStart) {
   const out = { due: addDays(t.due, shift) };
   if (t.start) out.start = addDays(t.start, shift);
   return out;
+}
+
+// ---------- queue order and placement ----------
+// The queue's order: task ids saved in settings.queueOrder (set by dragging in the Today queue). Tasks not in
+// that list (new, or never dragged) slot in by urgency order: each goes just before the first saved task the
+// urgency order would put after it. No saved order → plain urgency order.
+function queueOrder(open, saved, cmp) {
+  const pos = new Map((saved || []).map((id, i) => [String(id), i]));
+  const known = open.filter(t => pos.has(t.id)).sort((a, b) => pos.get(a.id) - pos.get(b.id));
+  const rest = open.filter(t => !pos.has(t.id)).sort(cmp);
+  if (!known.length) return rest;
+  const out = known.slice();
+  for (const t of rest) {
+    let i = out.findIndex(x => pos.has(x.id) && cmp(t, x) < 0);
+    if (i === -1) i = out.length;
+    out.splice(i, 0, t);
+  }
+  return out;
+}
+// New saved order after dragging `id` onto `targetId` (before it when moving up, after it when moving down).
+function moveInOrder(ids, id, targetId) {
+  const from = ids.indexOf(id), to = ids.indexOf(targetId);
+  if (from === -1 || to === -1 || from === to) return ids.slice();
+  const out = ids.slice(); out.splice(from, 1);
+  const at = out.indexOf(targetId) + (from < to ? 1 : 0);
+  out.splice(at, 0, id);
+  return out;
+}
+// Hours a day can hold: its open hours (Capacity) × the share of open time you actually work (settings
+// workSharePct). Today: that minus what's already logged today, and never more than the part of today's work
+// window still ahead.
+function dayBudget(settings, date, today, loggedToday) {
+  const cap = settings.capacity || {}, open = availableOnDay(cap, date, settings.defaultWeeklyHours, settings.capacityDays);
+  const share = Math.max(0, (typeof settings.workSharePct === "number" ? settings.workSharePct : 100) / 100);
+  if (date !== today) return open * share;
+  return Math.max(0, Math.min(open * share - (loggedToday || 0), open * dayLeftShare(date, settings.nowHours, settings.workWindow)));
+}
+// Fill days in queue order: each task takes what's left of each day's budget from its earliest day until its
+// hours are placed, so a task lower in the queue lands later, and a big task spills into the next days.
+// Earliest day: today, its start date if it hasn't been started, and the projected finish of any open task it
+// depends on (a dependency lower in the queue is placed first). Milestones take no hours.
+// hoursOf(t) picks × multipliers or raw. Gives per task { start, finish (null = not placed by `limit`), segs,
+// late (projected to finish after its due date) } and per day { date, budget, hours, byTask }.
+function placeQueue(ordered, byName, cfg, settings, today, hoursOf, loggedToday) {
+  const limit = addDays(settings.rangeEnd && settings.rangeEnd > today ? settings.rangeEnd : today, 90);
+  const isOpen = new Set(ordered.map(t => t.path));
+  const left = {}, days = {};
+  const dayOf = d => days[d] || (days[d] = { date: d, budget: dayBudget(settings, d, today, loggedToday), hours: 0, byTask: [] });
+  const room = d => { if (!(d in left)) left[d] = dayOf(d).budget; return left[d]; };
+  const tasks = {};
+  const place = (t, stack) => {
+    if (tasks[t.path]) return tasks[t.path];
+    if (stack.has(t.path)) return null; // dependency loop: ignore the back edge
+    stack.add(t.path);
+    let from = t.start && t.start > today && !isStarted(cfg, t) ? t.start : today, blocked = false;
+    for (const d of t.deps || []) {
+      const x = byName.get(d);
+      if (!x || !isOpen.has(x.path)) continue;
+      const px = place(x, stack);
+      if (!px) continue;
+      if (px.finish == null) blocked = true; else if (px.finish > from) from = px.finish;
+    }
+    const need = t.type === "milestone" ? 0 : Math.max(0, hoursOf(t) || 0);
+    const segs = [];
+    let rest = need;
+    if (!blocked) for (let d = from; rest > 1e-6 && d <= limit; d = addDays(d, 1)) {
+      const r = room(d);
+      if (r <= 1e-6) continue;
+      const take = Math.min(r, rest);
+      left[d] = r - take; rest -= take; segs.push([d, take]);
+      const day = dayOf(d); day.hours += take; day.byTask.push({ task: t, hours: take });
+    }
+    const finish = blocked || rest > 1e-6 ? null : segs.length ? segs[segs.length - 1][0] : from;
+    const res = { start: segs.length ? segs[0][0] : from, finish, segs, hours: need,
+      late: !!(t.due && t.due >= today && (finish == null || finish > t.due)) };
+    tasks[t.path] = res;
+    return res;
+  };
+  for (const t of ordered) place(t, new Set());
+  return { tasks, days };
+}
+// Share of open time actually logged over the `n` days before today (days with a Capacity entry only).
+function workedShare(tasks, settings, today, n) {
+  let open = 0, logged = 0;
+  const from = addDays(today, -(n || 14));
+  const cap = settings.capacity || {}, cd = settings.capacityDays || {}, counted = new Set();
+  for (let d = from; d < today; d = addDays(d, 1)) {
+    if (!(d in cd) && !(isoWeek(d) in cap)) continue; // before the planning range: no open hours to compare with
+    open += availableOnDay(cap, d, settings.defaultWeeklyHours, cd); counted.add(d);
+  }
+  for (const t of tasks) for (const l of t.logs || []) if (counted.has(l.date)) logged += l.hours;
+  return open > 0 ? { share: logged / open, logged, open, from: [...counted].sort()[0] } : null;
 }
 
 
@@ -1199,7 +1294,7 @@ module.exports = {
   linkText, parseChecklist, checklistProgress, parseTask,
   typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, suggestOrder, isStarted, startsLater, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute, availableOnDay, dayLeftShare, hoursUntil,
-  linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek,
+  linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek, queueOrder, moveInOrder, dayBudget, placeQueue, workedShare,
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,
   dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,
@@ -1401,6 +1496,21 @@ function tile(doc, title, value, sub) {
 }
 
 // ---------- queue ----------
+// Projected finish from queue placement. Red when it lands after the due date.
+function finishCell(doc, t, p, today) {
+  if (!p || t.type === "milestone" && !p.hours) return h(doc, "td", { class: "dpc-muted" }, p && p.finish ? relDay(p.finish, today) : "—");
+  if (p.finish == null) return h(doc, "td", { class: "dpc-nowrap dpc-warn", title: "Doesn't fit before the end of the planning range (or waits on a task that doesn't)" }, "won't fit");
+  return h(doc, "td", { class: "dpc-nowrap" + (p.late ? " dpc-warn" : ""),
+    title: `Projected ${p.start === p.finish ? "on" : "from " + fmtD(p.start) + " to"} ${fmtD(p.finish)}${t.due ? `; due ${fmtD(t.due)}` : ""}${p.late ? ` (${M.diffDays(t.due, p.finish)} day${M.diffDays(t.due, p.finish) === 1 ? "" : "s"} late)` : ""}` },
+    p.late ? `${relDay(p.finish, today)} · late` : relDay(p.finish, today));
+}
+function relDay(d, today) {
+  const n = M.diffDays(today, d);
+  if (n === 0) return "today";
+  if (n === 1) return "tomorrow";
+  if (n > 1 && n < 7) return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(M.toDay(d) * 86400000).getUTCDay()];
+  return fmtD(d);
+}
 function renderQueue(body, st, on) {
   const doc = body.ownerDocument, R = st.result, mults = st.settings.multipliers;
   if (!R.queue.length) {
@@ -1413,10 +1523,25 @@ function renderQueue(body, st, on) {
   renderDays(body, st, on);
   const tb = h(doc, "tbody");
   const pulled = st.settings.pulled || {};
+  const placed = (st.mode === "raw" ? R.placedRaw : R.placed) || {};
+  const custom = (st.settings.queueOrder || []).length > 0;
+  const w = R.worked;
+  body.append(h(doc, "div", { class: "dpc-queue-head dpc-muted" },
+    h(doc, "span", {}, `Drag ⋮⋮ to set the order. Days are filled top to bottom with ${R.workShare}% of their open hours`,
+      w ? h(doc, "span", { title: `${fmtH(w.logged)} logged of ${fmtH(w.open)} open since ${fmtD(w.from)}. Change the share in Settings.` }, ` (you logged ${Math.round(w.share * 100)}% over the last 2 weeks)`) : null, "."),
+    custom ? h(doc, "button", { class: "dpc-small dpc-right", title: "Forget the dragged order and sort by urgency again", onclick: () => on.resetQueueOrder && on.resetQueueOrder() }, "Reset to suggested order") : null));
+  let dragId = null;
   R.queue.forEach((t, i) => {
     const hrs = st.mode === "raw" ? M.remaining(t) : M.adjusted(t, mults);
-    tb.append(h(doc, "tr", {},
-      h(doc, "td", { class: "dpc-num dpc-muted" }, String(i + 1)),
+    const p = placed[t.path];
+    const prev = R.queue[i - 1], next = R.queue[i + 1];
+    const handle = h(doc, "button", { class: "dpc-drag", title: "Drag to reorder (or focus and use ↑ ↓)", "aria-label": `Reorder ${t.title}, position ${i + 1} of ${R.queue.length}`,
+      onkeydown: e => {
+        if (e.key === "ArrowUp" && prev) { e.preventDefault(); on.reorderQueue && on.reorderQueue(t.id, prev.id); }
+        else if (e.key === "ArrowDown" && next) { e.preventDefault(); on.reorderQueue && on.reorderQueue(t.id, next.id); }
+      } }, "⋮⋮");
+    const row = h(doc, "tr", { class: "dpc-qrow", draggable: "true", "data-id": t.id },
+      h(doc, "td", { class: "dpc-num dpc-muted dpc-nowrap" }, handle, " ", String(i + 1)),
       h(doc, "td", {}, urgencyChip(doc, R.urgency && R.urgency[t.path], false)),
       h(doc, "td", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority) || "—")),
       h(doc, "td", { class: "dpc-title-cell" }, statusPill(doc, st.cfg, t), taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType,
@@ -1424,15 +1549,31 @@ function renderQueue(body, st, on) {
         t.checklist ? h(doc, "div", { class: "dpc-muted dpc-sub" }, `${t.checklist.done}/${t.checklist.total} done-when`) : null),
       h(doc, "td", { class: "dpc-nowrap" + (R.risk[t.path] && R.risk[t.path].overdue ? " dpc-warn" : ""), title: t.due ? null : "No due date" }, relDue(t.due, R.today)),
       h(doc, "td", { class: "dpc-num" }, t.type === "milestone" ? "◆" : fmtH(hrs)),
+      finishCell(doc, t, p, R.today),
       h(doc, "td", {}, riskBadge(doc, R.risk[t.path]), overBadge(doc, R.over && R.over.has(t.path))),
       h(doc, "td", { class: "dpc-nowrap dpc-actions" }, pulled[t.path] && pulled[t.path].kind !== "deferred" ? h(doc, "button", { class: "dpc-small dpc-undo-pull", title: `Added today; undo puts it back to ${pulled[t.path].start ? "start " + fmtD(pulled[t.path].start) : "no start date"}`,
           "aria-label": `Undo adding ${t.title} to the queue`, onclick: () => on.undoStart(t.path) }, "Undo add") : null,
         h(doc, "button", { class: "dpc-small", title: "Log time on this task", "aria-label": `Log time on ${t.title}`, onclick: () => on.logTime(t.path) }, "+h"),
         h(doc, "button", { class: "dpc-small", title: "Move to tomorrow", "aria-label": `Move ${t.title} to tomorrow`, onclick: () => on.notToday(t.path) }, "Not today"),
-        h(doc, "button", { class: "dpc-done", title: t.checklist && t.checklist.done < t.checklist.total ? "Mark done (Done-when not all ticked)" : "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓"))));
+        h(doc, "button", { class: "dpc-done", title: t.checklist && t.checklist.done < t.checklist.total ? "Mark done (Done-when not all ticked)" : "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓")));
+    row.addEventListener("dragstart", e => { dragId = t.id; if (e.dataTransfer) { e.dataTransfer.setData("text/plain", t.id); e.dataTransfer.effectAllowed = "move"; } row.classList.add("is-drag"); });
+    row.addEventListener("dragend", () => { dragId = null; row.classList.remove("is-drag"); tb.querySelectorAll(".is-drop-above,.is-drop-below").forEach(x => x.classList.remove("is-drop-above", "is-drop-below")); });
+    row.addEventListener("dragover", e => {
+      if (!dragId || dragId === t.id) return;
+      e.preventDefault();
+      const up = R.queue.findIndex(x => x.id === dragId) > i;
+      row.classList.toggle("is-drop-above", up); row.classList.toggle("is-drop-below", !up);
+    });
+    row.addEventListener("dragleave", e => { if (!row.contains(e.relatedTarget)) row.classList.remove("is-drop-above", "is-drop-below"); });
+    row.addEventListener("drop", e => {
+      e.preventDefault(); row.classList.remove("is-drop-above", "is-drop-below");
+      const id = dragId || (e.dataTransfer && e.dataTransfer.getData("text/plain"));
+      if (id && id !== t.id && on.reorderQueue) on.reorderQueue(id, t.id);
+    });
+    tb.append(row);
   });
   body.append(h(doc, "table", { class: "dpc-table dpc-queue" },
-    h(doc, "thead", {}, h(doc, "tr", {}, ["#", "Why", "Priority", "Task", "Due", st.mode === "raw" ? "Left" : "Left ×", "", ""].map((c, i) => h(doc, "th", { class: i === 0 || i === 5 ? "dpc-num" : null }, c)))), tb));
+    h(doc, "thead", {}, h(doc, "tr", {}, ["#", "Why", "Priority", "Task", "Due", st.mode === "raw" ? "Left" : "Left ×", "Done by", "", ""].map((c, i) => h(doc, "th", { class: i === 0 || i === 5 ? "dpc-num" : null, title: i === 6 ? "Projected finish: the day this task's last hour lands when days are filled in queue order" : null }, c)))), tb));
   renderDoneToday(body, st, on);
   renderMore(body, st, on, false);
   if (R.upcoming) {
@@ -1443,47 +1584,68 @@ function renderQueue(body, st, on) {
   }
 }
 
-// Next 7 days: committed hours per day, split by work type or project. Height follows the
-// × multipliers / Raw estimates toggle; the dashed line is that day's available hours.
+// Next 7 days: hours placed per day by the queue (filled top to bottom), split by work type or project.
+// Height follows the × multipliers / Raw estimates toggle; the dashed line is that day's budget (open hours ×
+// your work share). Hovering or focusing a colour block pops up the tasks in it.
 function renderDays(body, st, on) {
   const doc = body.ownerDocument, R = st.result, cfg = st.cfg;
   if (!R.days || !R.days.length) return;
   const raw = st.mode === "raw", byProj = st.settings.daysGroup === "project";
   const tot = d => raw ? d.raw || 0 : d.adj;
   const map = d => (byProj ? (raw ? d.rawByProject : d.byProject) : (raw ? d.rawByType : d.byType)) || {};
+  const list = d => (raw ? d.rawByTask : d.byTask) || [];
+  const keyOf = t => byProj ? (t.project || M.NO_PROJECT) : M.typeKey(t);
   const projColor = k => (st.projectColors && st.projectColors[k]) || "var(--dpc-none)";
   const keys = byProj
     ? [...new Set(R.days.flatMap(d => Object.keys(map(d))))].sort((a, b) => R.days.reduce((x, d) => x + (map(d)[b] || 0), 0) - R.days.reduce((x, d) => x + (map(d)[a] || 0), 0))
     : typeKeys(cfg);
   const color = k => byProj ? projColor(k) : typeColor(cfg, k);
   const name = k => byProj ? (k === M.NO_PROJECT ? "No project" : k) : typeName(k, cfg);
-  const max = 1.15 * Math.max(1, ...R.days.map(d => Math.max(tot(d), d.available))); // headroom so the available line stays visible
+  const max = 1.15 * Math.max(1, ...R.days.map(d => Math.max(tot(d), d.available))); // headroom so the budget line stays visible
   const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const present = new Set();
   const what = raw ? "raw estimate" : "× multipliers";
+  // one floating popup shared by every block
+  const tip = h(doc, "div", { class: "dpc-poptip", role: "tooltip", id: "dpc-poptip", hidden: true });
+  const show = (el, d, k) => {
+    const rows = list(d).filter(x => keyOf(x.task) === k);
+    tip.replaceChildren(
+      h(doc, "div", { class: "dpc-poptip-head" }, h(doc, "span", { class: "dpc-swatch", style: `background:${color(k)}` }), `${name(k)} · ${fmtH(map(d)[k] || 0)}`, h(doc, "span", { class: "dpc-muted" }, ` · ${DOW[new Date(M.toDay(d.date) * 86400000).getUTCDay()]} ${fmtD(d.date)}`)),
+      ...rows.map(x => h(doc, "div", { class: "dpc-poptip-row" }, h(doc, "span", { class: "dpc-poptip-title" }, x.task.title), h(doc, "span", { class: "dpc-num" }, fmtH(x.hours)),
+        h(doc, "div", { class: "dpc-muted dpc-sub" }, [byProj ? x.task.workType || "No work-type" : x.task.project, x.task.due ? `due ${fmtD(x.task.due)}` : null].filter(Boolean).join(" · ")))));
+    tip.hidden = false;
+    const r = el.getBoundingClientRect(), host = tip.offsetParent ? tip.offsetParent.getBoundingClientRect() : { left: 0, top: 0, width: 1e4 };
+    const left = Math.max(0, Math.min(r.right - host.left + 8, host.width - tip.offsetWidth - 4));
+    tip.style.left = `${left}px`; tip.style.top = `${Math.max(0, r.top - host.top - 4)}px`;
+  };
+  const hide = () => { tip.hidden = true; };
   body.append(h(doc, "div", { class: "dpc-days-head" },
-    h(doc, "span", { class: "dpc-muted" }, `Next 7 days · committed hours (${what})`),
+    h(doc, "span", { class: "dpc-muted" }, `Next 7 days · queue filled top to bottom (${what}) · hover a colour to see its tasks`),
     h(doc, "div", { class: "dpc-seg dpc-seg-sm", role: "group", "aria-label": "Color day bars by" }, [["type", "Work type"], ["project", "Project"]].map(([id, nm]) =>
       h(doc, "button", { class: "dpc-seg-btn" + ((byProj ? "project" : "type") === id ? " is-active" : ""), "aria-pressed": (byProj ? "project" : "type") === id, onclick: () => on && on.setDaysGroup && on.setDaysGroup(id) }, nm)))));
-  body.append(h(doc, "div", { class: "dpc-days", role: "list", "aria-label": `Committed hours for the next 7 days (${what}), by ${byProj ? "project" : "work type"}` }, R.days.map((d, i) => {
+  body.append(h(doc, "div", { class: "dpc-days-wrap" }, h(doc, "div", { class: "dpc-days", role: "list", "aria-label": `Hours placed by the queue for the next 7 days (${what}), by ${byProj ? "project" : "work type"}` }, R.days.map((d, i) => {
     const v0 = tot(d), over = v0 > d.available + 0.05, m = map(d);
     const segs = keys.filter(k => (m[k] || 0) > 0.05);
     segs.forEach(k => present.add(k));
-    const top = (d.byTask || []).slice().sort((a, b) => (raw ? b.raw - a.raw : b.hours - a.hours)).slice(0, 4).map(x => `  ${x.task.title} · ${fmtH(raw ? x.raw : x.hours)}`);
-    const tip = [`${fmtD(d.date)}: ${fmtH(v0)} committed (${what}), ${fmtH(d.available)} available${over ? ` · over by ${fmtH(v0 - d.available)}` : ""}`,
-      ...segs.map(k => `${name(k)}: ${fmtH(m[k])}`), top.length ? "Most hours:" : null, ...top].filter(Boolean).join("\n");
+    const sum = `${fmtD(d.date)}: ${fmtH(v0)} placed (${what}) of ${fmtH(d.available)} (${R.workShare}% of ${fmtH(d.open || 0)} open${i === 0 ? " still ahead today, less time logged today" : ""})`;
     let acc = 0;
-    return h(doc, "div", { class: "dpc-day" + (i === 0 ? " is-today" : "") + (over ? " is-over" : ""), role: "listitem", title: tip },
-      h(doc, "div", { class: "dpc-day-name" }, i === 0 ? "Today" : DOW[new Date(M.toDay(d.date) * 86400000).getUTCDay()]),
+    return h(doc, "div", { class: "dpc-day" + (i === 0 ? " is-today" : "") + (over ? " is-over" : ""), role: "listitem" },
+      h(doc, "div", { class: "dpc-day-name", title: sum }, i === 0 ? "Today" : DOW[new Date(M.toDay(d.date) * 86400000).getUTCDay()]),
       h(doc, "div", { class: "dpc-day-bar" },
-        segs.map(k => { const v = m[k], el = h(doc, "div", { class: "dpc-day-seg", style: `bottom:${Math.min(100, (acc / max) * 100)}%;height:${Math.max(0, Math.min(100 - (acc / max) * 100, (v / max) * 100))}%;background:${color(k)}` }); acc += v; return el; }),
+        segs.map(k => {
+          const v = m[k], n = list(d).filter(x => keyOf(x.task) === k).length;
+          const el = h(doc, "div", { class: "dpc-day-seg", tabindex: "0", "aria-describedby": "dpc-poptip", "aria-label": `${name(k)}, ${fmtH(v)}, ${n} task${n === 1 ? "" : "s"}`,
+            style: `bottom:${Math.min(100, (acc / max) * 100)}%;height:${Math.max(0, Math.min(100 - (acc / max) * 100, (v / max) * 100))}%;background:${color(k)}`,
+            onmouseenter: () => show(el, d, k), onmouseleave: hide, onfocus: () => show(el, d, k), onblur: hide });
+          acc += v; return el;
+        }),
         h(doc, "div", { class: "dpc-day-cap", style: `bottom:${Math.min(100, (d.available / max) * 100)}%` })),
-      h(doc, "div", { class: "dpc-day-hrs" + (over ? " dpc-warn" : "") }, fmtH(v0)),
-      h(doc, "div", { class: "dpc-day-avail" }, `of ${fmtH(d.available)}`));
-  })));
+      h(doc, "div", { class: "dpc-day-hrs" + (over ? " dpc-warn" : ""), title: sum }, fmtH(v0)),
+      h(doc, "div", { class: "dpc-day-avail", title: sum }, `of ${fmtH(d.available)}`));
+  })), tip));
   body.append(h(doc, "div", { class: "dpc-legend dpc-days-legend" },
     keys.filter(k => present.has(k)).map(k => h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${color(k)}` }), name(k))),
-    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), "Hours available that day (from Capacity)")));
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), `Day's budget: ${R.workShare}% of open hours (from Capacity)`)));
 }
 function renderDoneToday(body, st, on) {
   const doc = body.ownerDocument, R = st.result;
@@ -1604,7 +1766,7 @@ function renderBoard(body, st, on) {
     h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board view" }, [["today", "Today"], ["week", "By week"]].map(([id, name]) =>
       h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
     h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates."
-      : "Started tasks (In Progress, or start date reached), most urgent first: Now, Tight, then least slack."),
+      : (st.settings.queueOrder || []).length ? "Started tasks (In Progress, or start date reached) in your order; new tasks slot in by urgency." : "Started tasks (In Progress, or start date reached), most urgent first: Now, Tight, then least slack."),
     h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.quickAdd(), title: "Quick add a task (command: Quick add task)" }, "+ Quick add")));
   if (mode === "today") { renderQueue(body, st, on); return; }
   const cols = R.board.map(c => ({ ...c, color: c.key === "overdue" ? "var(--dpc-risk)" : c.week && c.week.overloaded ? "var(--dpc-over)" : c.week && c.week.isCurrent ? "var(--interactive-accent, var(--text-accent))" : "var(--text-faint)" }));
@@ -2225,6 +2387,8 @@ const DEFAULTS = {
   timeMode: "day",
   timeGroup: "type",
   stampDotpmLogs: true,
+  queueOrder: [],     // task ids in the order you dragged them in the Today queue
+  workSharePct: 45,   // share of open time (Capacity) a day's queue placement fills
 };
 
 class CompanionView extends ItemView {
@@ -2341,6 +2505,8 @@ class CompanionView extends ItemView {
       openProjectNote: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
       moveCard: (path, key) => p.moveCard(path, key),
       setBoardMode: m => { p.settings.boardMode = m; p.saveSettings(); this.refresh(); },
+      reorderQueue: (id, targetId) => p.reorderQueue(id, targetId),
+      resetQueueOrder: () => { p.settings.queueOrder = []; p.saveSettings(); p.recompute(); },
       setDaysGroup: g => { p.settings.daysGroup = g; p.saveSettings(); this.refresh(); },
       setTypesView: m => { p.settings.typesView = m; p.saveSettings(); this.refresh(); },
       setSubprojects: v => { p.settings.showSubprojects = !!v; p.saveSettings(); this.refresh(); },
@@ -2445,6 +2611,15 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.settings.pulled = Object.fromEntries(Object.entries(data.pulled || {}).filter(([, v]) => v && v.date === today));
   }
   async saveSettings() { await this.saveData(this.settings); }
+  // Drag in the Today queue: save the whole current order (open tasks only) with `id` moved onto `targetId`.
+  reorderQueue(id, targetId) {
+    const ids = (this.result && this.result.order) || [];
+    const next = M.moveInOrder(ids, id, targetId);
+    if (next.join("\n") === ids.join("\n")) return;
+    this.settings.queueOrder = next;
+    this.saveSettings();
+    this.recompute();
+  }
 
   async reloadDotpmConfig() {
     const p = normalizePath(this.app.vault.configDir + "/plugins/project-manager/data.json");
@@ -3031,6 +3206,8 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setValue(String(S.overloadPct)).onChange(async v => { const n = parseFloat(v); if (n > 0) { S.overloadPct = n; await save(); } }));
     new Setting(el).setName("Tight threshold (%)").setDesc("The queue marks a task Tight when its hours left (× multiplier) take at least this share of the hours available before it's due.")
       .addText(t => t.setValue(String(S.tightPct || 50)).onChange(async v => { const n = parseFloat(v); if (n > 0 && n <= 100) { S.tightPct = n; await save(); } }));
+    new Setting(el).setName("Share of open time you work (%)").setDesc("The Today queue fills each day with this share of its open hours from Capacity, in queue order, so you can see when each task is likely to finish. The Today tab shows what you actually logged over the last 2 weeks; update this every other week with the multipliers.")
+      .addText(t => t.setValue(String(S.workSharePct)).onChange(async v => { const n = parseFloat(v); if (n > 0 && n <= 100) { S.workSharePct = n; await save(); } }));
     new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks.")
       .addToggle(t => t.setValue(S.progressFromChecklist).onChange(async v => { S.progressFromChecklist = v; await save(); }));
     new Setting(el).setName("dotpm tab project").setDesc("What the dotpm tab opens on.")

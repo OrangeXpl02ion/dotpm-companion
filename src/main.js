@@ -48,6 +48,8 @@ const DEFAULTS = {
   timeMode: "day",
   timeGroup: "type",
   stampDotpmLogs: true,
+  queueOrder: [],     // task ids in the order you dragged them in the Today queue
+  workSharePct: 45,   // share of open time (Capacity) a day's queue placement fills
 };
 
 class CompanionView extends ItemView {
@@ -164,6 +166,8 @@ class CompanionView extends ItemView {
       openProjectNote: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
       moveCard: (path, key) => p.moveCard(path, key),
       setBoardMode: m => { p.settings.boardMode = m; p.saveSettings(); this.refresh(); },
+      reorderQueue: (id, targetId) => p.reorderQueue(id, targetId),
+      resetQueueOrder: () => { p.settings.queueOrder = []; p.saveSettings(); p.recompute(); },
       setDaysGroup: g => { p.settings.daysGroup = g; p.saveSettings(); this.refresh(); },
       setTypesView: m => { p.settings.typesView = m; p.saveSettings(); this.refresh(); },
       setSubprojects: v => { p.settings.showSubprojects = !!v; p.saveSettings(); this.refresh(); },
@@ -268,6 +272,15 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.settings.pulled = Object.fromEntries(Object.entries(data.pulled || {}).filter(([, v]) => v && v.date === today));
   }
   async saveSettings() { await this.saveData(this.settings); }
+  // Drag in the Today queue: save the whole current order (open tasks only) with `id` moved onto `targetId`.
+  reorderQueue(id, targetId) {
+    const ids = (this.result && this.result.order) || [];
+    const next = M.moveInOrder(ids, id, targetId);
+    if (next.join("\n") === ids.join("\n")) return;
+    this.settings.queueOrder = next;
+    this.saveSettings();
+    this.recompute();
+  }
 
   async reloadDotpmConfig() {
     const p = normalizePath(this.app.vault.configDir + "/plugins/project-manager/data.json");
@@ -854,6 +867,8 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setValue(String(S.overloadPct)).onChange(async v => { const n = parseFloat(v); if (n > 0) { S.overloadPct = n; await save(); } }));
     new Setting(el).setName("Tight threshold (%)").setDesc("The queue marks a task Tight when its hours left (× multiplier) take at least this share of the hours available before it's due.")
       .addText(t => t.setValue(String(S.tightPct || 50)).onChange(async v => { const n = parseFloat(v); if (n > 0 && n <= 100) { S.tightPct = n; await save(); } }));
+    new Setting(el).setName("Share of open time you work (%)").setDesc("The Today queue fills each day with this share of its open hours from Capacity, in queue order, so you can see when each task is likely to finish. The Today tab shows what you actually logged over the last 2 weeks; update this every other week with the multipliers.")
+      .addText(t => t.setValue(String(S.workSharePct)).onChange(async v => { const n = parseFloat(v); if (n > 0 && n <= 100) { S.workSharePct = n; await save(); } }));
     new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks.")
       .addToggle(t => t.setValue(S.progressFromChecklist).onChange(async v => { S.progressFromChecklist = v; await save(); }));
     new Setting(el).setName("dotpm tab project").setDesc("What the dotpm tab opens on.")

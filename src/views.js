@@ -190,6 +190,21 @@ function tile(doc, title, value, sub) {
 }
 
 // ---------- queue ----------
+// Projected finish from queue placement. Red when it lands after the due date.
+function finishCell(doc, t, p, today) {
+  if (!p || t.type === "milestone" && !p.hours) return h(doc, "td", { class: "dpc-muted" }, p && p.finish ? relDay(p.finish, today) : "—");
+  if (p.finish == null) return h(doc, "td", { class: "dpc-nowrap dpc-warn", title: "Doesn't fit before the end of the planning range (or waits on a task that doesn't)" }, "won't fit");
+  return h(doc, "td", { class: "dpc-nowrap" + (p.late ? " dpc-warn" : ""),
+    title: `Projected ${p.start === p.finish ? "on" : "from " + fmtD(p.start) + " to"} ${fmtD(p.finish)}${t.due ? `; due ${fmtD(t.due)}` : ""}${p.late ? ` (${M.diffDays(t.due, p.finish)} day${M.diffDays(t.due, p.finish) === 1 ? "" : "s"} late)` : ""}` },
+    p.late ? `${relDay(p.finish, today)} · late` : relDay(p.finish, today));
+}
+function relDay(d, today) {
+  const n = M.diffDays(today, d);
+  if (n === 0) return "today";
+  if (n === 1) return "tomorrow";
+  if (n > 1 && n < 7) return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][new Date(M.toDay(d) * 86400000).getUTCDay()];
+  return fmtD(d);
+}
 function renderQueue(body, st, on) {
   const doc = body.ownerDocument, R = st.result, mults = st.settings.multipliers;
   if (!R.queue.length) {
@@ -202,10 +217,25 @@ function renderQueue(body, st, on) {
   renderDays(body, st, on);
   const tb = h(doc, "tbody");
   const pulled = st.settings.pulled || {};
+  const placed = (st.mode === "raw" ? R.placedRaw : R.placed) || {};
+  const custom = (st.settings.queueOrder || []).length > 0;
+  const w = R.worked;
+  body.append(h(doc, "div", { class: "dpc-queue-head dpc-muted" },
+    h(doc, "span", {}, `Drag ⋮⋮ to set the order. Days are filled top to bottom with ${R.workShare}% of their open hours`,
+      w ? h(doc, "span", { title: `${fmtH(w.logged)} logged of ${fmtH(w.open)} open since ${fmtD(w.from)}. Change the share in Settings.` }, ` (you logged ${Math.round(w.share * 100)}% over the last 2 weeks)`) : null, "."),
+    custom ? h(doc, "button", { class: "dpc-small dpc-right", title: "Forget the dragged order and sort by urgency again", onclick: () => on.resetQueueOrder && on.resetQueueOrder() }, "Reset to suggested order") : null));
+  let dragId = null;
   R.queue.forEach((t, i) => {
     const hrs = st.mode === "raw" ? M.remaining(t) : M.adjusted(t, mults);
-    tb.append(h(doc, "tr", {},
-      h(doc, "td", { class: "dpc-num dpc-muted" }, String(i + 1)),
+    const p = placed[t.path];
+    const prev = R.queue[i - 1], next = R.queue[i + 1];
+    const handle = h(doc, "button", { class: "dpc-drag", title: "Drag to reorder (or focus and use ↑ ↓)", "aria-label": `Reorder ${t.title}, position ${i + 1} of ${R.queue.length}`,
+      onkeydown: e => {
+        if (e.key === "ArrowUp" && prev) { e.preventDefault(); on.reorderQueue && on.reorderQueue(t.id, prev.id); }
+        else if (e.key === "ArrowDown" && next) { e.preventDefault(); on.reorderQueue && on.reorderQueue(t.id, next.id); }
+      } }, "⋮⋮");
+    const row = h(doc, "tr", { class: "dpc-qrow", draggable: "true", "data-id": t.id },
+      h(doc, "td", { class: "dpc-num dpc-muted dpc-nowrap" }, handle, " ", String(i + 1)),
       h(doc, "td", {}, urgencyChip(doc, R.urgency && R.urgency[t.path], false)),
       h(doc, "td", {}, h(doc, "span", { class: `dpc-pri dpc-pri-${t.priority}` }, M.label(st.cfg.priorities, t.priority) || "—")),
       h(doc, "td", { class: "dpc-title-cell" }, statusPill(doc, st.cfg, t), taskLink(doc, t, on), h(doc, "div", { class: "dpc-muted dpc-sub" }, [t.project, t.workType,
@@ -213,15 +243,31 @@ function renderQueue(body, st, on) {
         t.checklist ? h(doc, "div", { class: "dpc-muted dpc-sub" }, `${t.checklist.done}/${t.checklist.total} done-when`) : null),
       h(doc, "td", { class: "dpc-nowrap" + (R.risk[t.path] && R.risk[t.path].overdue ? " dpc-warn" : ""), title: t.due ? null : "No due date" }, relDue(t.due, R.today)),
       h(doc, "td", { class: "dpc-num" }, t.type === "milestone" ? "◆" : fmtH(hrs)),
+      finishCell(doc, t, p, R.today),
       h(doc, "td", {}, riskBadge(doc, R.risk[t.path]), overBadge(doc, R.over && R.over.has(t.path))),
       h(doc, "td", { class: "dpc-nowrap dpc-actions" }, pulled[t.path] && pulled[t.path].kind !== "deferred" ? h(doc, "button", { class: "dpc-small dpc-undo-pull", title: `Added today; undo puts it back to ${pulled[t.path].start ? "start " + fmtD(pulled[t.path].start) : "no start date"}`,
           "aria-label": `Undo adding ${t.title} to the queue`, onclick: () => on.undoStart(t.path) }, "Undo add") : null,
         h(doc, "button", { class: "dpc-small", title: "Log time on this task", "aria-label": `Log time on ${t.title}`, onclick: () => on.logTime(t.path) }, "+h"),
         h(doc, "button", { class: "dpc-small", title: "Move to tomorrow", "aria-label": `Move ${t.title} to tomorrow`, onclick: () => on.notToday(t.path) }, "Not today"),
-        h(doc, "button", { class: "dpc-done", title: t.checklist && t.checklist.done < t.checklist.total ? "Mark done (Done-when not all ticked)" : "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓"))));
+        h(doc, "button", { class: "dpc-done", title: t.checklist && t.checklist.done < t.checklist.total ? "Mark done (Done-when not all ticked)" : "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓")));
+    row.addEventListener("dragstart", e => { dragId = t.id; if (e.dataTransfer) { e.dataTransfer.setData("text/plain", t.id); e.dataTransfer.effectAllowed = "move"; } row.classList.add("is-drag"); });
+    row.addEventListener("dragend", () => { dragId = null; row.classList.remove("is-drag"); tb.querySelectorAll(".is-drop-above,.is-drop-below").forEach(x => x.classList.remove("is-drop-above", "is-drop-below")); });
+    row.addEventListener("dragover", e => {
+      if (!dragId || dragId === t.id) return;
+      e.preventDefault();
+      const up = R.queue.findIndex(x => x.id === dragId) > i;
+      row.classList.toggle("is-drop-above", up); row.classList.toggle("is-drop-below", !up);
+    });
+    row.addEventListener("dragleave", e => { if (!row.contains(e.relatedTarget)) row.classList.remove("is-drop-above", "is-drop-below"); });
+    row.addEventListener("drop", e => {
+      e.preventDefault(); row.classList.remove("is-drop-above", "is-drop-below");
+      const id = dragId || (e.dataTransfer && e.dataTransfer.getData("text/plain"));
+      if (id && id !== t.id && on.reorderQueue) on.reorderQueue(id, t.id);
+    });
+    tb.append(row);
   });
   body.append(h(doc, "table", { class: "dpc-table dpc-queue" },
-    h(doc, "thead", {}, h(doc, "tr", {}, ["#", "Why", "Priority", "Task", "Due", st.mode === "raw" ? "Left" : "Left ×", "", ""].map((c, i) => h(doc, "th", { class: i === 0 || i === 5 ? "dpc-num" : null }, c)))), tb));
+    h(doc, "thead", {}, h(doc, "tr", {}, ["#", "Why", "Priority", "Task", "Due", st.mode === "raw" ? "Left" : "Left ×", "Done by", "", ""].map((c, i) => h(doc, "th", { class: i === 0 || i === 5 ? "dpc-num" : null, title: i === 6 ? "Projected finish: the day this task's last hour lands when days are filled in queue order" : null }, c)))), tb));
   renderDoneToday(body, st, on);
   renderMore(body, st, on, false);
   if (R.upcoming) {
@@ -232,47 +278,68 @@ function renderQueue(body, st, on) {
   }
 }
 
-// Next 7 days: committed hours per day, split by work type or project. Height follows the
-// × multipliers / Raw estimates toggle; the dashed line is that day's available hours.
+// Next 7 days: hours placed per day by the queue (filled top to bottom), split by work type or project.
+// Height follows the × multipliers / Raw estimates toggle; the dashed line is that day's budget (open hours ×
+// your work share). Hovering or focusing a colour block pops up the tasks in it.
 function renderDays(body, st, on) {
   const doc = body.ownerDocument, R = st.result, cfg = st.cfg;
   if (!R.days || !R.days.length) return;
   const raw = st.mode === "raw", byProj = st.settings.daysGroup === "project";
   const tot = d => raw ? d.raw || 0 : d.adj;
   const map = d => (byProj ? (raw ? d.rawByProject : d.byProject) : (raw ? d.rawByType : d.byType)) || {};
+  const list = d => (raw ? d.rawByTask : d.byTask) || [];
+  const keyOf = t => byProj ? (t.project || M.NO_PROJECT) : M.typeKey(t);
   const projColor = k => (st.projectColors && st.projectColors[k]) || "var(--dpc-none)";
   const keys = byProj
     ? [...new Set(R.days.flatMap(d => Object.keys(map(d))))].sort((a, b) => R.days.reduce((x, d) => x + (map(d)[b] || 0), 0) - R.days.reduce((x, d) => x + (map(d)[a] || 0), 0))
     : typeKeys(cfg);
   const color = k => byProj ? projColor(k) : typeColor(cfg, k);
   const name = k => byProj ? (k === M.NO_PROJECT ? "No project" : k) : typeName(k, cfg);
-  const max = 1.15 * Math.max(1, ...R.days.map(d => Math.max(tot(d), d.available))); // headroom so the available line stays visible
+  const max = 1.15 * Math.max(1, ...R.days.map(d => Math.max(tot(d), d.available))); // headroom so the budget line stays visible
   const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   const present = new Set();
   const what = raw ? "raw estimate" : "× multipliers";
+  // one floating popup shared by every block
+  const tip = h(doc, "div", { class: "dpc-poptip", role: "tooltip", id: "dpc-poptip", hidden: true });
+  const show = (el, d, k) => {
+    const rows = list(d).filter(x => keyOf(x.task) === k);
+    tip.replaceChildren(
+      h(doc, "div", { class: "dpc-poptip-head" }, h(doc, "span", { class: "dpc-swatch", style: `background:${color(k)}` }), `${name(k)} · ${fmtH(map(d)[k] || 0)}`, h(doc, "span", { class: "dpc-muted" }, ` · ${DOW[new Date(M.toDay(d.date) * 86400000).getUTCDay()]} ${fmtD(d.date)}`)),
+      ...rows.map(x => h(doc, "div", { class: "dpc-poptip-row" }, h(doc, "span", { class: "dpc-poptip-title" }, x.task.title), h(doc, "span", { class: "dpc-num" }, fmtH(x.hours)),
+        h(doc, "div", { class: "dpc-muted dpc-sub" }, [byProj ? x.task.workType || "No work-type" : x.task.project, x.task.due ? `due ${fmtD(x.task.due)}` : null].filter(Boolean).join(" · ")))));
+    tip.hidden = false;
+    const r = el.getBoundingClientRect(), host = tip.offsetParent ? tip.offsetParent.getBoundingClientRect() : { left: 0, top: 0, width: 1e4 };
+    const left = Math.max(0, Math.min(r.right - host.left + 8, host.width - tip.offsetWidth - 4));
+    tip.style.left = `${left}px`; tip.style.top = `${Math.max(0, r.top - host.top - 4)}px`;
+  };
+  const hide = () => { tip.hidden = true; };
   body.append(h(doc, "div", { class: "dpc-days-head" },
-    h(doc, "span", { class: "dpc-muted" }, `Next 7 days · committed hours (${what})`),
+    h(doc, "span", { class: "dpc-muted" }, `Next 7 days · queue filled top to bottom (${what}) · hover a colour to see its tasks`),
     h(doc, "div", { class: "dpc-seg dpc-seg-sm", role: "group", "aria-label": "Color day bars by" }, [["type", "Work type"], ["project", "Project"]].map(([id, nm]) =>
       h(doc, "button", { class: "dpc-seg-btn" + ((byProj ? "project" : "type") === id ? " is-active" : ""), "aria-pressed": (byProj ? "project" : "type") === id, onclick: () => on && on.setDaysGroup && on.setDaysGroup(id) }, nm)))));
-  body.append(h(doc, "div", { class: "dpc-days", role: "list", "aria-label": `Committed hours for the next 7 days (${what}), by ${byProj ? "project" : "work type"}` }, R.days.map((d, i) => {
+  body.append(h(doc, "div", { class: "dpc-days-wrap" }, h(doc, "div", { class: "dpc-days", role: "list", "aria-label": `Hours placed by the queue for the next 7 days (${what}), by ${byProj ? "project" : "work type"}` }, R.days.map((d, i) => {
     const v0 = tot(d), over = v0 > d.available + 0.05, m = map(d);
     const segs = keys.filter(k => (m[k] || 0) > 0.05);
     segs.forEach(k => present.add(k));
-    const top = (d.byTask || []).slice().sort((a, b) => (raw ? b.raw - a.raw : b.hours - a.hours)).slice(0, 4).map(x => `  ${x.task.title} · ${fmtH(raw ? x.raw : x.hours)}`);
-    const tip = [`${fmtD(d.date)}: ${fmtH(v0)} committed (${what}), ${fmtH(d.available)} available${over ? ` · over by ${fmtH(v0 - d.available)}` : ""}`,
-      ...segs.map(k => `${name(k)}: ${fmtH(m[k])}`), top.length ? "Most hours:" : null, ...top].filter(Boolean).join("\n");
+    const sum = `${fmtD(d.date)}: ${fmtH(v0)} placed (${what}) of ${fmtH(d.available)} (${R.workShare}% of ${fmtH(d.open || 0)} open${i === 0 ? " still ahead today, less time logged today" : ""})`;
     let acc = 0;
-    return h(doc, "div", { class: "dpc-day" + (i === 0 ? " is-today" : "") + (over ? " is-over" : ""), role: "listitem", title: tip },
-      h(doc, "div", { class: "dpc-day-name" }, i === 0 ? "Today" : DOW[new Date(M.toDay(d.date) * 86400000).getUTCDay()]),
+    return h(doc, "div", { class: "dpc-day" + (i === 0 ? " is-today" : "") + (over ? " is-over" : ""), role: "listitem" },
+      h(doc, "div", { class: "dpc-day-name", title: sum }, i === 0 ? "Today" : DOW[new Date(M.toDay(d.date) * 86400000).getUTCDay()]),
       h(doc, "div", { class: "dpc-day-bar" },
-        segs.map(k => { const v = m[k], el = h(doc, "div", { class: "dpc-day-seg", style: `bottom:${Math.min(100, (acc / max) * 100)}%;height:${Math.max(0, Math.min(100 - (acc / max) * 100, (v / max) * 100))}%;background:${color(k)}` }); acc += v; return el; }),
+        segs.map(k => {
+          const v = m[k], n = list(d).filter(x => keyOf(x.task) === k).length;
+          const el = h(doc, "div", { class: "dpc-day-seg", tabindex: "0", "aria-describedby": "dpc-poptip", "aria-label": `${name(k)}, ${fmtH(v)}, ${n} task${n === 1 ? "" : "s"}`,
+            style: `bottom:${Math.min(100, (acc / max) * 100)}%;height:${Math.max(0, Math.min(100 - (acc / max) * 100, (v / max) * 100))}%;background:${color(k)}`,
+            onmouseenter: () => show(el, d, k), onmouseleave: hide, onfocus: () => show(el, d, k), onblur: hide });
+          acc += v; return el;
+        }),
         h(doc, "div", { class: "dpc-day-cap", style: `bottom:${Math.min(100, (d.available / max) * 100)}%` })),
-      h(doc, "div", { class: "dpc-day-hrs" + (over ? " dpc-warn" : "") }, fmtH(v0)),
-      h(doc, "div", { class: "dpc-day-avail" }, `of ${fmtH(d.available)}`));
-  })));
+      h(doc, "div", { class: "dpc-day-hrs" + (over ? " dpc-warn" : ""), title: sum }, fmtH(v0)),
+      h(doc, "div", { class: "dpc-day-avail", title: sum }, `of ${fmtH(d.available)}`));
+  })), tip));
   body.append(h(doc, "div", { class: "dpc-legend dpc-days-legend" },
     keys.filter(k => present.has(k)).map(k => h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${color(k)}` }), name(k))),
-    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), "Hours available that day (from Capacity)")));
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), `Day's budget: ${R.workShare}% of open hours (from Capacity)`)));
 }
 function renderDoneToday(body, st, on) {
   const doc = body.ownerDocument, R = st.result;
@@ -393,7 +460,7 @@ function renderBoard(body, st, on) {
     h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board view" }, [["today", "Today"], ["week", "By week"]].map(([id, name]) =>
       h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
     h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates."
-      : "Started tasks (In Progress, or start date reached), most urgent first: Now, Tight, then least slack."),
+      : (st.settings.queueOrder || []).length ? "Started tasks (In Progress, or start date reached) in your order; new tasks slot in by urgency." : "Started tasks (In Progress, or start date reached), most urgent first: Now, Tight, then least slack."),
     h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.quickAdd(), title: "Quick add a task (command: Quick add task)" }, "+ Quick add")));
   if (mode === "today") { renderQueue(body, st, on); return; }
   const cols = R.board.map(c => ({ ...c, color: c.key === "overdue" ? "var(--dpc-risk)" : c.week && c.week.overloaded ? "var(--dpc-over)" : c.week && c.week.isCurrent ? "var(--interactive-accent, var(--text-accent))" : "var(--text-faint)" }));
