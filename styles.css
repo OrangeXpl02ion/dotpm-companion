@@ -340,3 +340,4 @@
 .dpc-proj-btn:hover, .dpc-proj-btn:focus-visible { color: var(--text-normal); background: var(--background-modifier-hover); text-decoration: underline dotted; }
 .dpc-proj-btn:focus-visible { outline: 2px solid var(--interactive-accent); }
 .dpc-chip.dpc-proj-btn { display: inline-flex; align-items: center; gap: 6px; padding: 1px 6px; margin: 0; border: 1px solid var(--background-modifier-border); color: var(--text-muted); }
+.dpc-weekend.is-active { background: var(--interactive-accent); color: var(--text-on-accent); }

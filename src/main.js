@@ -50,8 +50,6 @@ const DEFAULTS = {
   stampDotpmLogs: true,
   queueOrder: [],     // task ids in the order you dragged them in the Today queue
   workSharePct: 45,   // share of open time (Capacity) a day's queue placement fills
-  weekendTypes: [],   // work types the queue saves for Saturdays/Sundays (tag a task "weekend" to do the same per task)
-  weekdayTypes: [],   // work types the queue never puts on a weekend (tag "weekday" per task)
 };
 
 class CompanionView extends ItemView {
@@ -160,6 +158,7 @@ class CompanionView extends ItemView {
       startNow: path => p.startNow(path),
       undoStart: path => p.undoStart(path),
       notToday: path => p.notToday(path),
+      toggleWeekend: path => { const t = p.tasks.get(path); if (t) p.updateTask(path, { tags: M.toggleTag(t.tags, "weekend") }); },
       logTime: path => { const t = p.tasks.get(path); if (t) new LogTimeModal(p, t).open(); },
       quickAdd: () => new QuickAddModal(p).open(),
       quickCapacity: () => new QuickCapacityModal(p).open(),
@@ -397,7 +396,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     try { if (await this.updateViaDotpm(t.id, patch)) return; }
     catch (e) { console.warn("[dotpm-companion] dotpm update failed; editing the file instead", e); }
     const lines = {};
-    for (const k in patch) { if (typeof patch[k] === "object" && patch[k] !== null) return; lines[k] = typeof patch[k] === "number" ? String(patch[k]) : JSON.stringify(patch[k]); }
+    for (const k in patch) { if (typeof patch[k] === "object" && patch[k] !== null && !Array.isArray(patch[k])) return; lines[k] = typeof patch[k] === "number" ? String(patch[k]) : JSON.stringify(patch[k]); }
     const f = this.app.vault.getAbstractFileByPath(path);
     if (f instanceof TFile) await this.app.vault.process(f, text => M.setFrontmatterLines(text, lines));
   }
@@ -933,11 +932,6 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setValue(String(S.tightPct || 50)).onChange(async v => { const n = parseFloat(v); if (n > 0 && n <= 100) { S.tightPct = n; await save(); } }));
     new Setting(el).setName("Share of open time you work (%)").setDesc("The Today queue fills each day with this share of its open hours from Capacity, in queue order, so you can see when each task is likely to finish. The Today tab shows what you actually logged over the last 2 weeks; update this every other week with the multipliers.")
       .addText(t => t.setValue(String(S.workSharePct)).onChange(async v => { const n = parseFloat(v); if (n > 0 && n <= 100) { S.workSharePct = n; await save(); } }));
-    const typeList = v => v.split(",").map(x => x.trim()).filter(Boolean);
-    new Setting(el).setName("Weekend work types").setDesc("Long sit-down work the Today queue saves for Saturdays and Sundays: it fills weekends up to the due date first and only then spills onto weekdays. Comma-separated work types; tag a single task #weekend to do the same.")
-      .addText(t => t.setPlaceholder("Render, CAD").setValue((S.weekendTypes || []).join(", ")).onChange(async v => { S.weekendTypes = typeList(v); await save(); }));
-    new Setting(el).setName("Weekday-only work types").setDesc("Work the queue never puts on a Saturday or Sunday (e.g. the shop is closed). Comma-separated work types; tag a single task #weekday to do the same.")
-      .addText(t => t.setPlaceholder("Fabrication").setValue((S.weekdayTypes || []).join(", ")).onChange(async v => { S.weekdayTypes = typeList(v); await save(); }));
     new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks.")
       .addToggle(t => t.setValue(S.progressFromChecklist).onChange(async v => { S.progressFromChecklist = v; await save(); }));
     new Setting(el).setName("dotpm tab project").setDesc("What the dotpm tab opens on.")

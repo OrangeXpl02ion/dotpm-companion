@@ -73,24 +73,33 @@ test("worked share only counts days with capacity", () => {
   assert.equal(w.open, 8); assert.equal(w.logged, 4); assert.equal(w.share, 0.5); assert.equal(w.from, "2026-10-19");
 });
 
-test("weekend work fills Saturday and Sunday first, then spills onto weekdays (0.18.0)", () => {
-  const SW = { ...S, weekendTypes: ["Render"], weekdayTypes: ["Fabrication"] };
-  const run = (T) => M.placeQueue(T, new Map(T.map(t => [t.id, t])), cfg, SW, today, t => M.adjusted(t, { Render: 1, Fabrication: 1, CAD: 1 }), 0);
-  // 8 h of Render due Fri Oct 30: Sat 24 + Sun 25 hold it (5 h a day)
-  let P = run([mk("r", { workType: "Render", estimate: 8, due: "2026-10-30" })]);
+test("weekend-tagged work fills Saturday and Sunday first, then spills onto weekdays (0.19.0)", () => {
+  const run = (T) => M.placeQueue(T, new Map(T.map(t => [t.id, t])), cfg, S, today, t => M.adjusted(t, { CAD: 1 }), 0);
+  const wk = { tags: ["weekend"] };
+  // 8 h due Fri Oct 30: Sat 24 + Sun 25 hold it (5 h a day)
+  let P = run([mk("r", { ...wk, estimate: 8, due: "2026-10-30" })]);
   assert.deepEqual(P.tasks["r.md"].segs, [["2026-10-24", 5], ["2026-10-25", 3]]);
   // 14 h due Mon Oct 26: weekends before the due date hold 10 h, the rest goes on the first weekday
-  P = run([mk("r", { workType: "Render", estimate: 14, due: "2026-10-26" })]);
+  P = run([mk("r", { ...wk, estimate: 14, due: "2026-10-26" })]);
   assert.deepEqual(P.tasks["r.md"].segs, [["2026-10-20", 4], ["2026-10-24", 5], ["2026-10-25", 5]]);
   assert.equal(P.tasks["r.md"].finish, "2026-10-25");
   assert.equal(P.tasks["r.md"].late, false);
-  // weekday-only: skips Sat/Sun
-  P = run([mk("f", { workType: "Fabrication", estimate: 12, start: "2026-10-23", due: "2026-11-06" })]);
-  assert.deepEqual(P.tasks["f.md"].segs, [["2026-10-23", 5], ["2026-10-26", 5], ["2026-10-27", 2]]);
-  // a tag wins over the work type; a weekday task is not pushed by weekend work
-  P = run([mk("w", { workType: "CAD", tags: ["weekend"], estimate: 5, due: "2026-11-06" }), mk("c", { estimate: 5, due: "2026-11-06" })]);
+  // no tag: any day; a weekday task isn't pushed by weekend work
+  P = run([mk("w", { tags: ["#Weekend"], estimate: 5, due: "2026-11-06" }), mk("c", { estimate: 5, due: "2026-11-06" })]);
   assert.deepEqual(P.tasks["w.md"].segs, [["2026-10-24", 5]]);
   assert.deepEqual(P.tasks["c.md"].segs, [["2026-10-20", 5]]);
-  assert.equal(M.dayRule(mk("x", { workType: "Fabrication", tags: ["weekday"] }), {}), "weekday");
-  assert.equal(M.dayRule(mk("x", { workType: "CAD" }), {}), null);
+  assert.equal(M.dayRule(mk("x", { workType: "Fabrication" })), null);
+  assert.deepEqual(M.toggleTag(["a"], "weekend"), ["a", "weekend"]);
+  assert.deepEqual(M.toggleTag(["a", "Weekend"], "weekend"), ["a"]);
+});
+
+test("this week, Mon to Sun: logged before today, queued from today", () => {
+  const T = [mk("a", { estimate: 12, due: "2026-11-06", logs: [{ date: "2026-10-19", hours: 2 }, { date: "2026-10-20", hours: 1 }], logged: 3 })];
+  const byName = new Map(T.map(t => [t.id, t]));
+  const P = M.placeQueue(T, byName, cfg, S, today, t => M.remaining(t), 1);
+  const W = M.weekQueueDays(T, S, P, P, today);
+  assert.equal(W.length, 7);
+  assert.equal(W[0].date, "2026-10-19"); assert.equal(W[0].past, true); assert.equal(W[0].logged.total, 2); assert.equal(W[0].placed.total, 0);
+  assert.equal(W[1].isToday, true); assert.equal(W[1].logged.total, 1); assert.equal(W[1].placed.total, 4, "today: budget 5 minus 1 logged");
+  assert.equal(W[2].placed.total, 5); assert.equal(W[0].budget, 5);
 });

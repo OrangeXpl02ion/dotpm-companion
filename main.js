@@ -121,7 +121,7 @@ function parseTask(path, fm, body, cfg) {
     completed: normDate(fm.completed),
     customFields: { ...cf },
     deps: Array.isArray(fm.dependencies) ? fm.dependencies.map(linkTarget).filter(Boolean) : [],
-    tags: Array.isArray(fm.tags) ? fm.tags.map(x => String(x).replace(/^#/, "").toLowerCase()) : [],
+    tags: Array.isArray(fm.tags) ? fm.tags.map(String) : [],
   };
 }
 // "[[toaster-3d-print|Toaster 3D print]]" -> "toaster-3d-print" (the note's file name)
@@ -416,7 +416,8 @@ function compute(tasks, cfg, settings, today) {
     days.push(x);
   }
   const over = new Set(open.filter(t => overBudget(t, mults)).map(t => t.path));
-  return { today, weekEnd, weeks, risk, queue, order: ordered.map(t => t.id), placed: placed.tasks, placedRaw: placedRaw.tasks,
+  const week = weekQueueDays(tasks, settings, placed, placedRaw, today);
+  return { today, weekEnd, week, weeks, risk, queue, order: ordered.map(t => t.id), placed: placed.tasks, placedRaw: placedRaw.tasks,
     workShare: typeof settings.workSharePct === "number" ? settings.workSharePct : 100, worked: workedShare(tasks, settings, today, 14), urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
     candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg) };
 }
@@ -570,17 +571,14 @@ function dayBudget(settings, date, today, loggedToday) {
   return Math.max(0, Math.min(open * share - (loggedToday || 0), open * dayLeftShare(date, settings.nowHours, settings.workWindow)));
 }
 function isWeekendDay(d) { const w = weekdayOf(d); return w === 0 || w === 6; }
-// Which days a task may take in the queue: a task tag ("weekend" / "weekday") wins, then the work-type lists in
-// settings (weekendTypes: long sit-down work you save for Saturdays and Sundays; weekdayTypes: work that can't
-// happen on weekends). null = any day.
-function dayRule(t, settings) {
-  const tags = t.tags || [];
-  if (tags.includes("weekend")) return "weekend";
-  if (tags.includes("weekday")) return "weekday";
-  const has = (list, v) => Array.isArray(list) && v != null && list.some(x => String(x).toLowerCase() === String(v).toLowerCase());
-  if (has(settings.weekendTypes, t.workType)) return "weekend";
-  if (has(settings.weekdayTypes, t.workType)) return "weekday";
-  return null;
+// Weekend work (0.19.0): a task tagged "weekend" (toggle it on its Today queue row) is long sit-down work you'd
+// normally not have time for midweek, so the queue fills Saturdays and Sundays up to its due date first and only
+// then spills onto weekdays. Planning only: its dates don't change.
+function hasTag(t, tag) { return (t.tags || []).some(x => String(x).replace(/^#/, "").toLowerCase() === tag); }
+function dayRule(t) { return hasTag(t, "weekend") ? "weekend" : null; }
+function toggleTag(tags, tag) {
+  const list = (tags || []).map(String), has = list.some(x => x.replace(/^#/, "").toLowerCase() === tag);
+  return has ? list.filter(x => x.replace(/^#/, "").toLowerCase() !== tag) : [...list, tag];
 }
 // Fill days in queue order: each task takes what's left of each day's budget from its earliest day until its
 // hours are placed, so a task lower in the queue lands later, and a big task spills into the next days.
@@ -608,9 +606,8 @@ function placeQueue(ordered, byName, cfg, settings, today, hoursOf, loggedToday)
       if (px.finish == null) blocked = true; else if (px.finish > from) from = px.finish;
     }
     const need = t.type === "milestone" ? 0 : Math.max(0, hoursOf(t) || 0);
-    // Day rule (0.18.0): "weekend" tasks fill Saturdays and Sundays up to their due date first and only then
-    // spill onto weekdays; "weekday" tasks never take a Saturday or Sunday (e.g. the shop is closed).
-    const rule = dayRule(t, settings);
+    // Weekend tasks fill Saturdays and Sundays up to their due date first, then spill onto weekdays.
+    const rule = dayRule(t);
     const got = new Map();
     let rest = need;
     const fill = (ok, until) => {
@@ -623,8 +620,7 @@ function placeQueue(ordered, byName, cfg, settings, today, hoursOf, loggedToday)
       }
     };
     if (!blocked) {
-      if (rule === "weekday") fill(d => !isWeekendDay(d), limit);
-      else if (rule === "weekend") { fill(isWeekendDay, t.due && t.due < limit ? t.due : limit); fill(() => true, limit); }
+      if (rule === "weekend") { fill(isWeekendDay, t.due && t.due < limit ? t.due : limit); fill(() => true, limit); }
       else fill(() => true, limit);
     }
     const segs = [...got.entries()].sort((a, b) => a[0].localeCompare(b[0]));
@@ -637,6 +633,36 @@ function placeQueue(ordered, byName, cfg, settings, today, hoursOf, loggedToday)
   };
   for (const t of ordered) place(t, new Set());
   return { tasks, days };
+}
+// This week, Monday to Sunday, the way the Time tab draws it: days before today show the hours you logged, today
+// shows what you logged plus what the queue still places today, later days show what the queue places.
+// budget = open hours × work share (the day's full budget, before anything is logged). placed / placedRaw are
+// placeQueue results (× multipliers / raw).
+function weekQueueDays(tasks, settings, placed, placedRaw, today) {
+  const share = Math.max(0, (typeof settings.workSharePct === "number" ? settings.workSharePct : 100) / 100);
+  const mon = mondayOf(today), out = [];
+  const empty = () => ({ total: 0, byType: {}, byProject: {}, byTask: [] });
+  const add = (m, task, hours) => {
+    const k = typeKey(task), pk = task.project || NO_PROJECT;
+    m.total += hours; m.byType[k] = (m.byType[k] || 0) + hours; m.byProject[pk] = (m.byProject[pk] || 0) + hours;
+    const e = m.byTask.find(x => x.task === task); if (e) e.hours += hours; else m.byTask.push({ task, hours });
+  };
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(mon, i);
+    const x = { date: d, past: d < today, isToday: d === today, logged: empty(), placed: empty(), placedRaw: empty(),
+      open: availableOnDay(settings.capacity || {}, d, settings.defaultWeeklyHours, settings.capacityDays) };
+    x.budget = x.open * share;
+    if (d <= today) for (const t of tasks) for (const l of t.logs || []) if (l.date === d && l.hours > 0) add(x.logged, t, l.hours);
+    if (d >= today) {
+      for (const [src, m] of [[placed, x.placed], [placedRaw, x.placedRaw]]) {
+        const day = src && src.days && src.days[d];
+        for (const e of (day && day.byTask) || []) add(m, e.task, e.hours);
+      }
+    }
+    for (const m of [x.logged, x.placed, x.placedRaw]) m.byTask.sort((a, b) => b.hours - a.hours);
+    out.push(x);
+  }
+  return out;
 }
 // Share of open time actually logged over the `n` days before today (days with a Capacity entry only).
 function workedShare(tasks, settings, today, n) {
@@ -1312,7 +1338,7 @@ function stampTimes(hours, nowMin) {
 }
 
 module.exports = {
-  dayRule, isWeekendDay,
+  dayRule, isWeekendDay, hasTag, toggleTag, weekQueueDays,
   logsToStamp, logsToRestamp, targetProgress, stampTimes, timeReport, weekAverageBefore, logSpan,
   bodyOf, setFrontmatterLines, frontmatterOf,
   NO_TYPE, NO_PROJECT, DEFAULT_MULTIPLIER, categoryGroups, DUE_SORT, isDefaultSort,
@@ -1587,6 +1613,9 @@ function renderQueue(body, st, on) {
       h(doc, "td", {}, riskBadge(doc, R.risk[t.path]), overBadge(doc, R.over && R.over.has(t.path))),
       h(doc, "td", { class: "dpc-nowrap dpc-actions-cell" }, h(doc, "div", { class: "dpc-actions" }, pulled[t.path] && pulled[t.path].kind !== "deferred" ? h(doc, "button", { class: "dpc-small dpc-undo-pull", title: `Added today; undo puts it back to ${pulled[t.path].start ? "start " + fmtD(pulled[t.path].start) : "no start date"}`,
           "aria-label": `Undo adding ${t.title} to the queue`, onclick: () => on.undoStart(t.path) }, "Undo add") : null,
+        (() => { const on_ = M.hasTag(t, "weekend"); return h(doc, "button", { class: "dpc-small dpc-weekend" + (on_ ? " is-active" : ""), "aria-pressed": on_,
+          title: on_ ? "Weekend task: the queue saves it for Saturday and Sunday first. Click to turn off." : "Mark as weekend work: needs an open window, so the queue saves it for Saturday and Sunday first",
+          "aria-label": `${on_ ? "Unmark" : "Mark"} ${t.title} as weekend work`, onclick: () => on.toggleWeekend && on.toggleWeekend(t.path) }, "Wknd"); })(),
         h(doc, "button", { class: "dpc-small", title: "Log time on this task", "aria-label": `Log time on ${t.title}`, onclick: () => on.logTime(t.path) }, "+h"),
         h(doc, "button", { class: "dpc-small", title: "Move to tomorrow", "aria-label": `Move ${t.title} to tomorrow`, onclick: () => on.notToday(t.path) }, "Not today"),
         h(doc, "button", { class: "dpc-done", title: t.checklist && t.checklist.done < t.checklist.total ? "Mark done (Done-when not all ticked)" : "Mark done", "aria-label": `Mark ${t.title} done`, onclick: () => on.markDone(t.path) }, "✓"))));
@@ -1618,68 +1647,70 @@ function renderQueue(body, st, on) {
   }
 }
 
-// Next 7 days: hours placed per day by the queue (filled top to bottom), split by work type or project.
-// Height follows the × multipliers / Raw estimates toggle; the dashed line is that day's budget (open hours ×
-// your work share). Hovering or focusing a colour block pops up the tasks in it.
+// This week, Monday to Sunday, drawn like the Time tab's week chart: solid = hours you logged, light = hours the
+// queue places (filled top to bottom, × multipliers or raw), box behind each bar = that day's budget (open hours ×
+// your work share). Split by work type or project; hover a block for its tasks.
 function renderDays(body, st, on) {
   const doc = body.ownerDocument, R = st.result, cfg = st.cfg;
-  if (!R.days || !R.days.length) return;
-  const raw = st.mode === "raw", byProj = st.settings.daysGroup === "project";
-  const tot = d => raw ? d.raw || 0 : d.adj;
-  const map = d => (byProj ? (raw ? d.rawByProject : d.byProject) : (raw ? d.rawByType : d.byType)) || {};
-  const list = d => (raw ? d.rawByTask : d.byTask) || [];
+  const days = R.week || [];
+  if (!days.length) return;
+  const raw = st.mode === "raw", byProj = st.settings.daysGroup === "project", today = R.today;
+  const pl = d => raw ? d.placedRaw : d.placed;
+  const mapOf = m => (byProj ? m.byProject : m.byType) || {};
   const keyOf = t => byProj ? (t.project || M.NO_PROJECT) : M.typeKey(t);
   const projColor = k => (st.projectColors && st.projectColors[k]) || "var(--dpc-none)";
   const keys = byProj
-    ? [...new Set(R.days.flatMap(d => Object.keys(map(d))))].sort((a, b) => R.days.reduce((x, d) => x + (map(d)[b] || 0), 0) - R.days.reduce((x, d) => x + (map(d)[a] || 0), 0))
+    ? [...new Set(days.flatMap(d => [...Object.keys(mapOf(d.logged)), ...Object.keys(mapOf(pl(d)))]))].sort()
     : typeKeys(cfg);
   const color = k => byProj ? projColor(k) : typeColor(cfg, k);
   const name = k => byProj ? (k === M.NO_PROJECT ? "No project" : k) : typeName(k, cfg);
-  const max = 1.15 * Math.max(1, ...R.days.map(d => Math.max(tot(d), d.available))); // headroom so the budget line stays visible
-  const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const what = raw ? "raw estimates" : "× multipliers";
   const present = new Set();
-  const what = raw ? "raw estimate" : "× multipliers";
-  // one floating popup shared by every block
-  const tip = h(doc, "div", { class: "dpc-poptip", role: "tooltip", id: "dpc-poptip", hidden: true });
-  const show = (el, d, k) => {
-    const rows = list(d).filter(x => keyOf(x.task) === k);
-    tip.replaceChildren(
-      h(doc, "div", { class: "dpc-poptip-head" }, h(doc, "span", { class: "dpc-swatch", style: `background:${color(k)}` }), `${name(k)} · ${fmtH(map(d)[k] || 0)}`, h(doc, "span", { class: "dpc-muted" }, ` · ${DOW[new Date(M.toDay(d.date) * 86400000).getUTCDay()]} ${fmtD(d.date)}`)),
-      ...rows.map(x => h(doc, "div", { class: "dpc-poptip-row" }, h(doc, "span", { class: "dpc-poptip-title" }, x.task.title), h(doc, "span", { class: "dpc-num" }, fmtH(x.hours)),
-        h(doc, "div", { class: "dpc-muted dpc-sub" }, [byProj ? x.task.workType || "No work-type" : x.task.project, x.task.due ? `due ${fmtD(x.task.due)}` : null].filter(Boolean).join(" · ")))));
-    tip.hidden = false;
-    const r = el.getBoundingClientRect(), host = tip.offsetParent ? tip.offsetParent.getBoundingClientRect() : { left: 0, top: 0, width: 1e4 };
-    const left = Math.max(0, Math.min(r.right - host.left + 8, host.width - tip.offsetWidth - 4));
-    tip.style.left = `${left}px`; tip.style.top = `${Math.max(0, r.top - host.top - 4)}px`;
-  };
-  const hide = () => { tip.hidden = true; };
   body.append(h(doc, "div", { class: "dpc-days-head" },
-    h(doc, "span", { class: "dpc-muted" }, `Next 7 days · queue filled top to bottom (${what}) · hover a colour to see its tasks`),
-    h(doc, "div", { class: "dpc-seg dpc-seg-sm", role: "group", "aria-label": "Color day bars by" }, [["type", "Work type"], ["project", "Project"]].map(([id, nm]) =>
+    h(doc, "span", { class: "dpc-muted" }, `This week · solid = logged, light = queue filled top to bottom (${what}) · hover a block for its tasks`),
+    h(doc, "div", { class: "dpc-seg dpc-seg-sm", role: "group", "aria-label": "Color bars by" }, [["type", "Work type"], ["project", "Project"]].map(([id, nm]) =>
       h(doc, "button", { class: "dpc-seg-btn" + ((byProj ? "project" : "type") === id ? " is-active" : ""), "aria-pressed": (byProj ? "project" : "type") === id, onclick: () => on && on.setDaysGroup && on.setDaysGroup(id) }, nm)))));
-  body.append(h(doc, "div", { class: "dpc-days-wrap" }, h(doc, "div", { class: "dpc-days", role: "list", "aria-label": `Hours placed by the queue for the next 7 days (${what}), by ${byProj ? "project" : "work type"}` }, R.days.map((d, i) => {
-    const v0 = tot(d), over = v0 > d.available + 0.05, m = map(d);
-    const segs = keys.filter(k => (m[k] || 0) > 0.05);
-    segs.forEach(k => present.add(k));
-    const sum = `${fmtD(d.date)}: ${fmtH(v0)} placed (${what}) of ${fmtH(d.available)} (${R.workShare}% of ${fmtH(d.open || 0)} open${i === 0 ? " still ahead today, less time logged today" : ""})`;
+  const wrap = h(doc, "div", { class: "dpc-chart-wrap" }), tip = h(doc, "div", { class: "dpc-tip", role: "status" });
+  const hover = (el, text) => {
+    const show = e => { tip.textContent = text; tip.classList.add("is-on"); const r = el.getBoundingClientRect();
+      placeTip(tip, wrap, e && e.clientX != null ? e.clientX : r.right, e && e.clientY != null ? e.clientY : r.top + r.height / 2); };
+    el.addEventListener("mousemove", show); el.addEventListener("focus", show);
+    el.addEventListener("mouseleave", () => tip.classList.remove("is-on")); el.addEventListener("blur", () => tip.classList.remove("is-on"));
+  };
+  const W = Math.max(320, Math.min(760, body.clientWidth || 640)), padL = 38, padR = 8, padT = 12, padB = 24, H = 200;
+  const max = Math.max(1, ...days.map(d => Math.max(d.logged.total + pl(d).total, d.budget)));
+  const stp = niceStep(max), top = Math.ceil(max / stp) * stp, cw = (W - padL - padR) / 7, bw = Math.min(44, cw * 0.6);
+  const y = v => padT + (H - padT - padB) * (1 - v / top);
+  const svg = s(doc, "svg", { class: "dpc-chart", viewBox: `0 0 ${W} ${H}`, width: W, height: H, role: "img", "aria-label": `This week: hours logged and hours the queue places each day (${what})` });
+  for (let v = 0; v <= top + 1e-9; v += stp) {
+    svg.append(s(doc, "line", { x1: padL, x2: W - padR, y1: y(v), y2: y(v), class: v === 0 ? "dpc-axis" : "dpc-grid" }));
+    svg.append(s(doc, "text", { x: padL - 6, y: y(v) + 4, class: "dpc-tick", "text-anchor": "end" }, `${Math.round(v * 10) / 10}h`));
+  }
+  days.forEach((d, i) => {
+    const x = padL + i * cw + (cw - bw) / 2;
+    const g = s(doc, "g", { class: "dpc-time-day is-future", "aria-label": `${dowOf(d.date)} ${fmtD(d.date)}: ${fmtH(d.logged.total)} logged, ${fmtH(pl(d).total)} queued of ${fmtH(d.budget)}` });
+    if (d.budget > 0) g.append(s(doc, "rect", { x, width: bw, y: y(d.budget), height: y(0) - y(d.budget), rx: 4, class: "dpc-time-avail" }));
     let acc = 0;
-    return h(doc, "div", { class: "dpc-day" + (i === 0 ? " is-today" : "") + (over ? " is-over" : ""), role: "listitem" },
-      h(doc, "div", { class: "dpc-day-name", title: sum }, i === 0 ? "Today" : DOW[new Date(M.toDay(d.date) * 86400000).getUTCDay()]),
-      h(doc, "div", { class: "dpc-day-bar" },
-        segs.map(k => {
-          const v = m[k], n = list(d).filter(x => keyOf(x.task) === k).length;
-          const el = h(doc, "div", { class: "dpc-day-seg", tabindex: "0", "aria-describedby": "dpc-poptip", "aria-label": `${name(k)}, ${fmtH(v)}, ${n} task${n === 1 ? "" : "s"}`,
-            style: `bottom:${Math.min(100, (acc / max) * 100)}%;height:${Math.max(0, Math.min(100 - (acc / max) * 100, (v / max) * 100))}%;background:${color(k)}`,
-            onmouseenter: () => show(el, d, k), onmouseleave: hide, onfocus: () => show(el, d, k), onblur: hide });
-          acc += v; return el;
-        }),
-        h(doc, "div", { class: "dpc-day-cap", style: `bottom:${Math.min(100, (d.available / max) * 100)}%` })),
-      h(doc, "div", { class: "dpc-day-hrs" + (over ? " dpc-warn" : ""), title: sum }, fmtH(v0)),
-      h(doc, "div", { class: "dpc-day-avail", title: sum }, `of ${fmtH(d.available)}`));
-  })), tip));
-  body.append(h(doc, "div", { class: "dpc-legend dpc-days-legend" },
+    for (const [m, kind] of [[d.logged, "logged"], [pl(d), "queued"]]) {
+      const mm = mapOf(m);
+      for (const k of keys) {
+        const v = mm[k] || 0;
+        if (v < 0.01) continue;
+        present.add(k);
+        const r = s(doc, "rect", { x, width: bw, y: y(acc + v), height: Math.max(0, y(acc) - y(acc + v) - 1), rx: 2, style: `fill:${color(k)}`, class: "dpc-seg-mark" + (kind === "queued" ? " dpc-proj-plan" : ""), tabindex: 0 });
+        const tasks = m.byTask.filter(e => keyOf(e.task) === k).map(e => `${e.task.title} ${fmtH(e.hours)}`).join(" · ");
+        hover(r, `${dowOf(d.date)} ${fmtD(d.date)} · ${name(k)} · ${fmtH(v)} ${kind}: ${tasks}`);
+        g.append(r); acc += v;
+      }
+    }
+    g.append(s(doc, "text", { x: x + bw / 2, y: H - 6, class: "dpc-tick" + (d.isToday ? " is-current" : ""), "text-anchor": "middle" }, d.isToday ? "Today" : dowOf(d.date)));
+    svg.append(g);
+  });
+  wrap.append(svg, tip);
+  body.append(wrap, h(doc, "div", { class: "dpc-legend" },
     keys.filter(k => present.has(k)).map(k => h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${color(k)}` }), name(k))),
-    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch-line" }), `Day's budget: ${R.workShare}% of open hours (from Capacity)`)));
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch dpc-proj-plan-sw" }), "Queued (light)"),
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch dpc-time-avail-sw" }), `Day's budget: ${R.workShare}% of open hours`)));
 }
 function renderDoneToday(body, st, on) {
   const doc = body.ownerDocument, R = st.result;
@@ -2426,8 +2457,6 @@ const DEFAULTS = {
   stampDotpmLogs: true,
   queueOrder: [],     // task ids in the order you dragged them in the Today queue
   workSharePct: 45,   // share of open time (Capacity) a day's queue placement fills
-  weekendTypes: [],   // work types the queue saves for Saturdays/Sundays (tag a task "weekend" to do the same per task)
-  weekdayTypes: [],   // work types the queue never puts on a weekend (tag "weekday" per task)
 };
 
 class CompanionView extends ItemView {
@@ -2536,6 +2565,7 @@ class CompanionView extends ItemView {
       startNow: path => p.startNow(path),
       undoStart: path => p.undoStart(path),
       notToday: path => p.notToday(path),
+      toggleWeekend: path => { const t = p.tasks.get(path); if (t) p.updateTask(path, { tags: M.toggleTag(t.tags, "weekend") }); },
       logTime: path => { const t = p.tasks.get(path); if (t) new LogTimeModal(p, t).open(); },
       quickAdd: () => new QuickAddModal(p).open(),
       quickCapacity: () => new QuickCapacityModal(p).open(),
@@ -2773,7 +2803,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     try { if (await this.updateViaDotpm(t.id, patch)) return; }
     catch (e) { console.warn("[dotpm-companion] dotpm update failed; editing the file instead", e); }
     const lines = {};
-    for (const k in patch) { if (typeof patch[k] === "object" && patch[k] !== null) return; lines[k] = typeof patch[k] === "number" ? String(patch[k]) : JSON.stringify(patch[k]); }
+    for (const k in patch) { if (typeof patch[k] === "object" && patch[k] !== null && !Array.isArray(patch[k])) return; lines[k] = typeof patch[k] === "number" ? String(patch[k]) : JSON.stringify(patch[k]); }
     const f = this.app.vault.getAbstractFileByPath(path);
     if (f instanceof TFile) await this.app.vault.process(f, text => M.setFrontmatterLines(text, lines));
   }
@@ -3309,11 +3339,6 @@ class CompanionSettings extends PluginSettingTab {
       .addText(t => t.setValue(String(S.tightPct || 50)).onChange(async v => { const n = parseFloat(v); if (n > 0 && n <= 100) { S.tightPct = n; await save(); } }));
     new Setting(el).setName("Share of open time you work (%)").setDesc("The Today queue fills each day with this share of its open hours from Capacity, in queue order, so you can see when each task is likely to finish. The Today tab shows what you actually logged over the last 2 weeks; update this every other week with the multipliers.")
       .addText(t => t.setValue(String(S.workSharePct)).onChange(async v => { const n = parseFloat(v); if (n > 0 && n <= 100) { S.workSharePct = n; await save(); } }));
-    const typeList = v => v.split(",").map(x => x.trim()).filter(Boolean);
-    new Setting(el).setName("Weekend work types").setDesc("Long sit-down work the Today queue saves for Saturdays and Sundays: it fills weekends up to the due date first and only then spills onto weekdays. Comma-separated work types; tag a single task #weekend to do the same.")
-      .addText(t => t.setPlaceholder("Render, CAD").setValue((S.weekendTypes || []).join(", ")).onChange(async v => { S.weekendTypes = typeList(v); await save(); }));
-    new Setting(el).setName("Weekday-only work types").setDesc("Work the queue never puts on a Saturday or Sunday (e.g. the shop is closed). Comma-separated work types; tag a single task #weekday to do the same.")
-      .addText(t => t.setPlaceholder("Fabrication").setValue((S.weekdayTypes || []).join(", ")).onChange(async v => { S.weekdayTypes = typeList(v); await save(); }));
     new Setting(el).setName("Progress from Done-when checklist").setDesc("Set each task's progress to the share of ticked boxes under “## Done when”. Overwrites progress set by hand on those tasks.")
       .addToggle(t => t.setValue(S.progressFromChecklist).onChange(async v => { S.progressFromChecklist = v; await save(); }));
     new Setting(el).setName("dotpm tab project").setDesc("What the dotpm tab opens on.")

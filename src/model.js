@@ -117,7 +117,7 @@ function parseTask(path, fm, body, cfg) {
     completed: normDate(fm.completed),
     customFields: { ...cf },
     deps: Array.isArray(fm.dependencies) ? fm.dependencies.map(linkTarget).filter(Boolean) : [],
-    tags: Array.isArray(fm.tags) ? fm.tags.map(x => String(x).replace(/^#/, "").toLowerCase()) : [],
+    tags: Array.isArray(fm.tags) ? fm.tags.map(String) : [],
   };
 }
 // "[[toaster-3d-print|Toaster 3D print]]" -> "toaster-3d-print" (the note's file name)
@@ -412,7 +412,8 @@ function compute(tasks, cfg, settings, today) {
     days.push(x);
   }
   const over = new Set(open.filter(t => overBudget(t, mults)).map(t => t.path));
-  return { today, weekEnd, weeks, risk, queue, order: ordered.map(t => t.id), placed: placed.tasks, placedRaw: placedRaw.tasks,
+  const week = weekQueueDays(tasks, settings, placed, placedRaw, today);
+  return { today, weekEnd, week, weeks, risk, queue, order: ordered.map(t => t.id), placed: placed.tasks, placedRaw: placedRaw.tasks,
     workShare: typeof settings.workSharePct === "number" ? settings.workSharePct : 100, worked: workedShare(tasks, settings, today, 14), urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
     candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg) };
 }
@@ -566,17 +567,14 @@ function dayBudget(settings, date, today, loggedToday) {
   return Math.max(0, Math.min(open * share - (loggedToday || 0), open * dayLeftShare(date, settings.nowHours, settings.workWindow)));
 }
 function isWeekendDay(d) { const w = weekdayOf(d); return w === 0 || w === 6; }
-// Which days a task may take in the queue: a task tag ("weekend" / "weekday") wins, then the work-type lists in
-// settings (weekendTypes: long sit-down work you save for Saturdays and Sundays; weekdayTypes: work that can't
-// happen on weekends). null = any day.
-function dayRule(t, settings) {
-  const tags = t.tags || [];
-  if (tags.includes("weekend")) return "weekend";
-  if (tags.includes("weekday")) return "weekday";
-  const has = (list, v) => Array.isArray(list) && v != null && list.some(x => String(x).toLowerCase() === String(v).toLowerCase());
-  if (has(settings.weekendTypes, t.workType)) return "weekend";
-  if (has(settings.weekdayTypes, t.workType)) return "weekday";
-  return null;
+// Weekend work (0.19.0): a task tagged "weekend" (toggle it on its Today queue row) is long sit-down work you'd
+// normally not have time for midweek, so the queue fills Saturdays and Sundays up to its due date first and only
+// then spills onto weekdays. Planning only: its dates don't change.
+function hasTag(t, tag) { return (t.tags || []).some(x => String(x).replace(/^#/, "").toLowerCase() === tag); }
+function dayRule(t) { return hasTag(t, "weekend") ? "weekend" : null; }
+function toggleTag(tags, tag) {
+  const list = (tags || []).map(String), has = list.some(x => x.replace(/^#/, "").toLowerCase() === tag);
+  return has ? list.filter(x => x.replace(/^#/, "").toLowerCase() !== tag) : [...list, tag];
 }
 // Fill days in queue order: each task takes what's left of each day's budget from its earliest day until its
 // hours are placed, so a task lower in the queue lands later, and a big task spills into the next days.
@@ -604,9 +602,8 @@ function placeQueue(ordered, byName, cfg, settings, today, hoursOf, loggedToday)
       if (px.finish == null) blocked = true; else if (px.finish > from) from = px.finish;
     }
     const need = t.type === "milestone" ? 0 : Math.max(0, hoursOf(t) || 0);
-    // Day rule (0.18.0): "weekend" tasks fill Saturdays and Sundays up to their due date first and only then
-    // spill onto weekdays; "weekday" tasks never take a Saturday or Sunday (e.g. the shop is closed).
-    const rule = dayRule(t, settings);
+    // Weekend tasks fill Saturdays and Sundays up to their due date first, then spill onto weekdays.
+    const rule = dayRule(t);
     const got = new Map();
     let rest = need;
     const fill = (ok, until) => {
@@ -619,8 +616,7 @@ function placeQueue(ordered, byName, cfg, settings, today, hoursOf, loggedToday)
       }
     };
     if (!blocked) {
-      if (rule === "weekday") fill(d => !isWeekendDay(d), limit);
-      else if (rule === "weekend") { fill(isWeekendDay, t.due && t.due < limit ? t.due : limit); fill(() => true, limit); }
+      if (rule === "weekend") { fill(isWeekendDay, t.due && t.due < limit ? t.due : limit); fill(() => true, limit); }
       else fill(() => true, limit);
     }
     const segs = [...got.entries()].sort((a, b) => a[0].localeCompare(b[0]));
@@ -633,6 +629,36 @@ function placeQueue(ordered, byName, cfg, settings, today, hoursOf, loggedToday)
   };
   for (const t of ordered) place(t, new Set());
   return { tasks, days };
+}
+// This week, Monday to Sunday, the way the Time tab draws it: days before today show the hours you logged, today
+// shows what you logged plus what the queue still places today, later days show what the queue places.
+// budget = open hours × work share (the day's full budget, before anything is logged). placed / placedRaw are
+// placeQueue results (× multipliers / raw).
+function weekQueueDays(tasks, settings, placed, placedRaw, today) {
+  const share = Math.max(0, (typeof settings.workSharePct === "number" ? settings.workSharePct : 100) / 100);
+  const mon = mondayOf(today), out = [];
+  const empty = () => ({ total: 0, byType: {}, byProject: {}, byTask: [] });
+  const add = (m, task, hours) => {
+    const k = typeKey(task), pk = task.project || NO_PROJECT;
+    m.total += hours; m.byType[k] = (m.byType[k] || 0) + hours; m.byProject[pk] = (m.byProject[pk] || 0) + hours;
+    const e = m.byTask.find(x => x.task === task); if (e) e.hours += hours; else m.byTask.push({ task, hours });
+  };
+  for (let i = 0; i < 7; i++) {
+    const d = addDays(mon, i);
+    const x = { date: d, past: d < today, isToday: d === today, logged: empty(), placed: empty(), placedRaw: empty(),
+      open: availableOnDay(settings.capacity || {}, d, settings.defaultWeeklyHours, settings.capacityDays) };
+    x.budget = x.open * share;
+    if (d <= today) for (const t of tasks) for (const l of t.logs || []) if (l.date === d && l.hours > 0) add(x.logged, t, l.hours);
+    if (d >= today) {
+      for (const [src, m] of [[placed, x.placed], [placedRaw, x.placedRaw]]) {
+        const day = src && src.days && src.days[d];
+        for (const e of (day && day.byTask) || []) add(m, e.task, e.hours);
+      }
+    }
+    for (const m of [x.logged, x.placed, x.placedRaw]) m.byTask.sort((a, b) => b.hours - a.hours);
+    out.push(x);
+  }
+  return out;
 }
 // Share of open time actually logged over the `n` days before today (days with a Capacity entry only).
 function workedShare(tasks, settings, today, n) {
@@ -1308,7 +1334,7 @@ function stampTimes(hours, nowMin) {
 }
 
 module.exports = {
-  dayRule, isWeekendDay,
+  dayRule, isWeekendDay, hasTag, toggleTag, weekQueueDays,
   logsToStamp, logsToRestamp, targetProgress, stampTimes, timeReport, weekAverageBefore, logSpan,
   bodyOf, setFrontmatterLines, frontmatterOf,
   NO_TYPE, NO_PROJECT, DEFAULT_MULTIPLIER, categoryGroups, DUE_SORT, isDefaultSort,
