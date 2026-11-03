@@ -483,14 +483,18 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const el = n.noticeEl || n.messageEl;
     if (el) el.append(btn);
   }
-  // Board drop: a week column shifts start and due by whole weeks.
+  // Board drop: a week column shifts start and due by whole weeks; a day column (By day) by whole days.
   async moveCard(path, key) {
     const t = this.tasks.get(path);
     if (!t) return;
     this.noteReason(path, "moved on the Board");
-    const w = this.result && this.result.weeks.find(x => x.week === key);
-    if (!w) return;
-    const patch = M.shiftToWeek(t, w.start);
+    let patch;
+    if (String(key).startsWith("day:")) { const d = key.slice(4); if (!M.isDate(d)) return; patch = M.shiftToDay(t, d); }
+    else {
+      const w = this.result && this.result.weeks.find(x => x.week === key);
+      if (!w) return;
+      patch = M.shiftToWeek(t, w.start);
+    }
     if (patch) await this.updateTask(path, patch);
   }
   async setTaskField(path, field, value) {

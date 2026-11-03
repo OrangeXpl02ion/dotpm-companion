@@ -415,7 +415,7 @@ function compute(tasks, cfg, settings, today) {
   const week = weekQueueDays(tasks, settings, placed, placedRaw, today);
   return { today, weekEnd, week, weeks, risk, queue, order: ordered.map(t => t.id), placed: placed.tasks, placedRaw: placedRaw.tasks,
     workShare: typeof settings.workSharePct === "number" ? settings.workSharePct : 100, worked: workedShare(tasks, settings, today, 14), urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
-    candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg) };
+    candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg), boardDays: boardDays(open, cfg, settings, today, urg) };
 }
 
 // ---------- urgency ----------
@@ -520,6 +520,30 @@ function board(open, cfg, settings, weeks, today, urg) {
   }
   for (const c of cols) c.tasks.sort(order);
   return cols.filter(c => c.tasks.length || c.week);
+}
+// Board by day (0.20.0): this week, Monday to Sunday, one column per day holding the open tasks due that day,
+// plus Overdue for anything due before this week. Same urgency order as the week board.
+function boardDays(open, cfg, settings, today, urg) {
+  const order = urgencyOrder(cfg, settings.multipliers || {}, urg || {});
+  const mon = mondayOf(today), sun = addDays(mon, 6);
+  const cols = [{ key: "overdue", label: "Overdue", tasks: [] }];
+  for (let i = 0; i < 7; i++) { const d = addDays(mon, i); cols.push({ key: "day:" + d, date: d, isToday: d === today, isPast: d < today, tasks: [] }); }
+  const byKey = Object.fromEntries(cols.map(c => [c.key, c]));
+  for (const t of open) {
+    if (!t.due || t.due > sun) continue;
+    (t.due < mon ? byKey.overdue : byKey["day:" + t.due]).tasks.push(t);
+  }
+  for (const c of cols) c.tasks.sort(order);
+  return cols.filter(c => c.tasks.length || c.date);
+}
+// New start/due when a task is moved to another day: shift both by whole days; no due date -> that day.
+function shiftToDay(t, day) {
+  if (!t.due) return { due: day };
+  const shift = diffDays(t.due, day);
+  if (!shift) return null;
+  const out = { due: day };
+  if (t.start) out.start = addDays(t.start, shift);
+  return out;
 }
 // New start/due when a task is moved to another week: shift both by whole weeks; no due date -> Friday of that week.
 function shiftToWeek(t, weekStart) {
@@ -1343,7 +1367,7 @@ module.exports = {
   linkText, parseChecklist, checklistProgress, parseTask,
   typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, suggestOrder, isStarted, startsLater, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute, availableOnDay, dayLeftShare, hoursUntil,
-  linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek, queueOrder, moveInOrder, dayBudget, placeQueue, workedShare,
+  linkTarget, baseName, isReady, measuredSeries, board, boardDays, shiftToDay, shiftToWeek, queueOrder, moveInOrder, dayBudget, placeQueue, workedShare,
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,
   dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,

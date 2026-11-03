@@ -341,3 +341,7 @@
 .dpc-proj-btn:focus-visible { outline: 2px solid var(--interactive-accent); }
 .dpc-chip.dpc-proj-btn { display: inline-flex; align-items: center; gap: 6px; padding: 1px 6px; margin: 0; border: 1px solid var(--background-modifier-border); color: var(--text-muted); }
 .dpc-weekend.is-active { background: var(--interactive-accent); color: var(--text-on-accent); }
+.dpc-board-days { gap: 8px; }
+.dpc-board-days .dpc-col { flex: 1 0 140px; min-width: 140px; padding: 8px 6px 10px; }
+.dpc-board-days .dpc-col-sub { flex-wrap: wrap; }
+.dpc-board-days .dpc-col.is-past { opacity: .75; }

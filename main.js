@@ -419,7 +419,7 @@ function compute(tasks, cfg, settings, today) {
   const week = weekQueueDays(tasks, settings, placed, placedRaw, today);
   return { today, weekEnd, week, weeks, risk, queue, order: ordered.map(t => t.id), placed: placed.tasks, placedRaw: placedRaw.tasks,
     workShare: typeof settings.workSharePct === "number" ? settings.workSharePct : 100, worked: workedShare(tasks, settings, today, 14), urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
-    candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg) };
+    candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg), boardDays: boardDays(open, cfg, settings, today, urg) };
 }
 
 // ---------- urgency ----------
@@ -524,6 +524,30 @@ function board(open, cfg, settings, weeks, today, urg) {
   }
   for (const c of cols) c.tasks.sort(order);
   return cols.filter(c => c.tasks.length || c.week);
+}
+// Board by day (0.20.0): this week, Monday to Sunday, one column per day holding the open tasks due that day,
+// plus Overdue for anything due before this week. Same urgency order as the week board.
+function boardDays(open, cfg, settings, today, urg) {
+  const order = urgencyOrder(cfg, settings.multipliers || {}, urg || {});
+  const mon = mondayOf(today), sun = addDays(mon, 6);
+  const cols = [{ key: "overdue", label: "Overdue", tasks: [] }];
+  for (let i = 0; i < 7; i++) { const d = addDays(mon, i); cols.push({ key: "day:" + d, date: d, isToday: d === today, isPast: d < today, tasks: [] }); }
+  const byKey = Object.fromEntries(cols.map(c => [c.key, c]));
+  for (const t of open) {
+    if (!t.due || t.due > sun) continue;
+    (t.due < mon ? byKey.overdue : byKey["day:" + t.due]).tasks.push(t);
+  }
+  for (const c of cols) c.tasks.sort(order);
+  return cols.filter(c => c.tasks.length || c.date);
+}
+// New start/due when a task is moved to another day: shift both by whole days; no due date -> that day.
+function shiftToDay(t, day) {
+  if (!t.due) return { due: day };
+  const shift = diffDays(t.due, day);
+  if (!shift) return null;
+  const out = { due: day };
+  if (t.start) out.start = addDays(t.start, shift);
+  return out;
 }
 // New start/due when a task is moved to another week: shift both by whole weeks; no due date -> Friday of that week.
 function shiftToWeek(t, weekStart) {
@@ -1347,7 +1371,7 @@ module.exports = {
   linkText, parseChecklist, checklistProgress, parseTask,
   typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, suggestOrder, isStarted, startsLater, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute, availableOnDay, dayLeftShare, hoursUntil,
-  linkTarget, baseName, isReady, measuredSeries, board, shiftToWeek, queueOrder, moveInOrder, dayBudget, placeQueue, workedShare,
+  linkTarget, baseName, isReady, measuredSeries, board, boardDays, shiftToDay, shiftToWeek, queueOrder, moveInOrder, dayBudget, placeQueue, workedShare,
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,
   dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,
@@ -1412,7 +1436,7 @@ function render(root, st, on) {
   const bar = h(doc, "div", { class: "dpc-bar" },
     h(doc, "div", { class: "dpc-tabs", role: "tablist" }, TABS.map(([id, name]) =>
       h(doc, "button", { class: "dpc-tab" + (st.tab === id ? " is-active" : ""), role: "tab", "aria-selected": st.tab === id, onclick: () => on.setTab(id) }, name))),
-    (st.tab === "board" && st.settings.boardMode !== "week") || st.tab === "types"
+    (st.tab === "board" && !["week", "day"].includes(st.settings.boardMode)) || st.tab === "types"
       ? h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Hours shown" },
           [["adj", "× multipliers"], ["raw", "Raw estimates"]].map(([id, name]) =>
             h(doc, "button", { class: "dpc-seg-btn" + (st.mode === id ? " is-active" : ""), "aria-pressed": st.mode === id, onclick: () => on.setMode(id) }, name)))
@@ -1826,14 +1850,16 @@ function projectCard(doc, s, depth, st, on) {
 // progress, a project chip and the due date. Actions (✓, Move…) show on hover, always on touch screens.
 function renderBoard(body, st, on) {
   const doc = body.ownerDocument, R = st.result;
-  const mode = st.settings.boardMode === "week" ? "week" : "today";
+  const mode = ["week", "day"].includes(st.settings.boardMode) ? st.settings.boardMode : "today";
   body.append(h(doc, "div", { class: "dpc-toolbar" },
-    h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board view" }, [["today", "Today"], ["week", "By week"]].map(([id, name]) =>
+    h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board view" }, [["today", "Today"], ["week", "By week"], ["day", "By day"]].map(([id, name]) =>
       h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
-    h(doc, "span", { class: "dpc-muted" }, mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates."
+    h(doc, "span", { class: "dpc-muted" }, mode === "day" ? "This week: each card sits on the day it's due, most urgent first. Drag to another day to move its dates (start moves with it)."
+      : mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates."
       : (st.settings.queueOrder || []).length ? "Started tasks (In Progress, or start date reached) in your order; new tasks slot in by urgency." : "Started tasks (In Progress, or start date reached), most urgent first: Now, Tight, then least slack."),
     h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.quickAdd(), title: "Quick add a task (command: Quick add task)" }, "+ Quick add")));
   if (mode === "today") { renderQueue(body, st, on); return; }
+  if (mode === "day") { renderBoardDays(body, st, on); return; }
   const cols = R.board.map(c => ({ ...c, color: c.key === "overdue" ? "var(--dpc-risk)" : c.week && c.week.overloaded ? "var(--dpc-over)" : c.week && c.week.isCurrent ? "var(--interactive-accent, var(--text-accent))" : "var(--text-faint)" }));
   const targets = R.board.filter(c => c.week).map(c => ({ key: c.key, label: c.week.isCurrent ? "This week" : `${c.key.slice(5)} · ${fmtD(c.week.start)}` }));
   const wrap = h(doc, "div", { class: "dpc-board" });
@@ -1857,6 +1883,39 @@ function renderBoard(body, st, on) {
   }
   body.append(wrap);
 }
+// Board by day: this week Mon–Sun, a column per day with the tasks due that day (plus Overdue from before this
+// week). Each day shows the hours the queue places on it against that day's budget, as on the Today chart.
+function renderBoardDays(body, st, on) {
+  const doc = body.ownerDocument, R = st.result, raw = st.mode === "raw";
+  const cols = R.boardDays || [];
+  const wk = Object.fromEntries((R.week || []).map(d => [d.date, d]));
+  const targets = cols.filter(c => c.date).map(c => ({ key: c.key, label: c.isToday ? "Today" : `${dowOf(c.date)} ${fmtD(c.date)}` }));
+  const wrap = h(doc, "div", { class: "dpc-board dpc-board-days" });
+  for (const c of cols) {
+    const d = c.date && wk[c.date];
+    const color = c.key === "overdue" ? "var(--dpc-risk)" : c.isToday ? "var(--interactive-accent, var(--text-accent))" : "var(--text-faint)";
+    const label = c.key === "overdue" ? "Overdue" : c.isToday ? `Today · ${dowOf(c.date)}` : dowOf(c.date);
+    const used = d ? (d.past ? d.logged.total : (d.isToday ? d.logged.total : 0) + (raw ? d.placedRaw.total : d.placed.total)) : 0;
+    const pct = d && d.budget > 0 ? used / d.budget : 0;
+    const head = h(doc, "div", { class: "dpc-col-head" },
+      h(doc, "div", { class: "dpc-col-title" }, h(doc, "span", { class: "dpc-col-name", style: `color:${color}` }, label), h(doc, "span", { class: "dpc-count" }, String(c.tasks.length))),
+      d ? h(doc, "div", { class: "dpc-col-sub" }, h(doc, "span", { class: "dpc-muted dpc-nowrap" }, fmtD(c.date)),
+          h(doc, "div", { class: "dpc-meter dpc-meter-sm" + (pct > 1.001 ? " is-over" : ""), role: "img", "aria-label": `${Math.round(pct * 100)}% of the day's budget` },
+            h(doc, "div", { class: "dpc-meter-fill", style: `width:${Math.min(100, pct * 100)}%` })),
+          h(doc, "span", { class: "dpc-muted dpc-nowrap", title: d.past ? "Hours logged that day of its budget" : "Hours logged plus hours the queue places that day, of the day's budget" }, `${fmtH(used)}/${fmtH(d.budget)}`)) : null);
+    const list = h(doc, "div", { class: "dpc-col-list" });
+    for (const t of c.tasks) list.append(card(doc, t, st, on, "day", targets));
+    if (!c.tasks.length) list.append(h(doc, "p", { class: "dpc-muted dpc-sub" }, "Nothing due"));
+    const col = h(doc, "section", { class: "dpc-col" + (c.isToday ? " is-current" : "") + (c.isPast ? " is-past" : ""), style: `--dpc-col:${color}`, "aria-label": label }, head, list);
+    if (c.date) {
+      col.addEventListener("dragover", e => { e.preventDefault(); col.classList.add("is-drop"); });
+      col.addEventListener("dragleave", e => { if (!col.contains(e.relatedTarget)) col.classList.remove("is-drop"); });
+      col.addEventListener("drop", e => { e.preventDefault(); col.classList.remove("is-drop"); const p = e.dataTransfer.getData("text/plain"); if (p) on.moveCard(p, c.key); });
+    }
+    wrap.append(col);
+  }
+  body.append(wrap);
+}
 function card(doc, t, st, on, mode, targets) {
   const R = st.result, cfg = st.cfg;
   const done = M.isComplete(cfg, t.status);
@@ -1871,7 +1930,7 @@ function card(doc, t, st, on, mode, targets) {
   const pct = Math.max(0, Math.min(100, t.progress || 0));
   const hrs = t.estimate != null ? `${fmtH(t.logged).replace("h", "")}/${fmtH(t.estimate)}` : t.logged ? fmtH(t.logged) : null;
   const projColor = (st.projectColors && st.projectColors[t.project]) || "var(--text-faint)";
-  const cur = t.due ? M.isoWeek(t.due) : "";
+  const cur = !t.due ? "" : mode === "day" ? "day:" + t.due : M.isoWeek(t.due);
   const move = h(doc, "select", { class: "dropdown dpc-move", "aria-label": `Move ${t.title}` },
     h(doc, "option", { value: "", selected: true, disabled: true }, "Move…"), targets.filter(x => x.key !== cur).map(x => h(doc, "option", { value: x.key }, x.label)));
   move.addEventListener("change", () => { if (move.value) on.moveCard(t.path, move.value); });
@@ -2890,14 +2949,18 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     const el = n.noticeEl || n.messageEl;
     if (el) el.append(btn);
   }
-  // Board drop: a week column shifts start and due by whole weeks.
+  // Board drop: a week column shifts start and due by whole weeks; a day column (By day) by whole days.
   async moveCard(path, key) {
     const t = this.tasks.get(path);
     if (!t) return;
     this.noteReason(path, "moved on the Board");
-    const w = this.result && this.result.weeks.find(x => x.week === key);
-    if (!w) return;
-    const patch = M.shiftToWeek(t, w.start);
+    let patch;
+    if (String(key).startsWith("day:")) { const d = key.slice(4); if (!M.isDate(d)) return; patch = M.shiftToDay(t, d); }
+    else {
+      const w = this.result && this.result.weeks.find(x => x.week === key);
+      if (!w) return;
+      patch = M.shiftToWeek(t, w.start);
+    }
     if (patch) await this.updateTask(path, patch);
   }
   async setTaskField(path, field, value) {

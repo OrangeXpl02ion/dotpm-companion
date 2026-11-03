@@ -508,3 +508,21 @@ test("week projection: snapshot, current and rebuilt plans, and day breakdown", 
   const nxt = M.weekProjection(T, cfg, S, R, "2026-11-02", today);
   assert.equal(nxt.source, "current"); assert.ok(nxt.plan.byType.Writing > 0);
 });
+
+test("board by day: this week's days, tasks on the day they're due, overdue before Monday (0.20.0)", () => {
+  const cfg2 = M.readDotpmConfig(require("./fixture/vault.json").dotpm);
+  const mk2 = (id, due, start) => ({ id, path: id + ".md", title: id, status: "todo", priority: "medium", due, start: start || null, logs: [], logged: 0, deps: [], type: "task", workType: "CAD", estimate: 1 });
+  const today = "2026-10-21"; // Wednesday
+  const open = [mk2("a", "2026-10-21"), mk2("b", "2026-10-25"), mk2("old", "2026-10-15"), mk2("next", "2026-10-28"), mk2("mon", "2026-10-19")];
+  const cols = M.boardDays(open, cfg2, { multipliers: {} }, today, {});
+  assert.deepEqual(cols.map(c => c.key), ["overdue", "day:2026-10-19", "day:2026-10-20", "day:2026-10-21", "day:2026-10-22", "day:2026-10-23", "day:2026-10-24", "day:2026-10-25"]);
+  const at = k => cols.find(c => c.key === k).tasks.map(t => t.id);
+  assert.deepEqual(at("overdue"), ["old"]);
+  assert.deepEqual(at("day:2026-10-19"), ["mon"], "earlier this week stays on its day");
+  assert.deepEqual(at("day:2026-10-21"), ["a"]);
+  assert.deepEqual(at("day:2026-10-25"), ["b"]);
+  assert.equal(cols.find(c => c.key === "day:2026-10-21").isToday, true);
+  assert.deepEqual(M.shiftToDay(mk2("x", "2026-10-21", "2026-10-19"), "2026-10-23"), { due: "2026-10-23", start: "2026-10-21" });
+  assert.deepEqual(M.shiftToDay(mk2("x", null), "2026-10-23"), { due: "2026-10-23" });
+  assert.equal(M.shiftToDay(mk2("x", "2026-10-23"), "2026-10-23"), null);
+});
