@@ -117,6 +117,7 @@ function parseTask(path, fm, body, cfg) {
     completed: normDate(fm.completed),
     customFields: { ...cf },
     deps: Array.isArray(fm.dependencies) ? fm.dependencies.map(linkTarget).filter(Boolean) : [],
+    tags: Array.isArray(fm.tags) ? fm.tags.map(x => String(x).replace(/^#/, "").toLowerCase()) : [],
   };
 }
 // "[[toaster-3d-print|Toaster 3D print]]" -> "toaster-3d-print" (the note's file name)
@@ -564,6 +565,19 @@ function dayBudget(settings, date, today, loggedToday) {
   if (date !== today) return open * share;
   return Math.max(0, Math.min(open * share - (loggedToday || 0), open * dayLeftShare(date, settings.nowHours, settings.workWindow)));
 }
+function isWeekendDay(d) { const w = weekdayOf(d); return w === 0 || w === 6; }
+// Which days a task may take in the queue: a task tag ("weekend" / "weekday") wins, then the work-type lists in
+// settings (weekendTypes: long sit-down work you save for Saturdays and Sundays; weekdayTypes: work that can't
+// happen on weekends). null = any day.
+function dayRule(t, settings) {
+  const tags = t.tags || [];
+  if (tags.includes("weekend")) return "weekend";
+  if (tags.includes("weekday")) return "weekday";
+  const has = (list, v) => Array.isArray(list) && v != null && list.some(x => String(x).toLowerCase() === String(v).toLowerCase());
+  if (has(settings.weekendTypes, t.workType)) return "weekend";
+  if (has(settings.weekdayTypes, t.workType)) return "weekday";
+  return null;
+}
 // Fill days in queue order: each task takes what's left of each day's budget from its earliest day until its
 // hours are placed, so a task lower in the queue lands later, and a big task spills into the next days.
 // Earliest day: today, its start date if it hasn't been started, and the projected finish of any open task it
@@ -590,15 +604,27 @@ function placeQueue(ordered, byName, cfg, settings, today, hoursOf, loggedToday)
       if (px.finish == null) blocked = true; else if (px.finish > from) from = px.finish;
     }
     const need = t.type === "milestone" ? 0 : Math.max(0, hoursOf(t) || 0);
-    const segs = [];
+    // Day rule (0.18.0): "weekend" tasks fill Saturdays and Sundays up to their due date first and only then
+    // spill onto weekdays; "weekday" tasks never take a Saturday or Sunday (e.g. the shop is closed).
+    const rule = dayRule(t, settings);
+    const got = new Map();
     let rest = need;
-    if (!blocked) for (let d = from; rest > 1e-6 && d <= limit; d = addDays(d, 1)) {
-      const r = room(d);
-      if (r <= 1e-6) continue;
-      const take = Math.min(r, rest);
-      left[d] = r - take; rest -= take; segs.push([d, take]);
-      const day = dayOf(d); day.hours += take; day.byTask.push({ task: t, hours: take });
+    const fill = (ok, until) => {
+      for (let d = from; rest > 1e-6 && d <= until; d = addDays(d, 1)) {
+        if (!ok(d)) continue;
+        const r = room(d);
+        if (r <= 1e-6) continue;
+        const take = Math.min(r, rest);
+        left[d] = r - take; rest -= take; got.set(d, (got.get(d) || 0) + take);
+      }
+    };
+    if (!blocked) {
+      if (rule === "weekday") fill(d => !isWeekendDay(d), limit);
+      else if (rule === "weekend") { fill(isWeekendDay, t.due && t.due < limit ? t.due : limit); fill(() => true, limit); }
+      else fill(() => true, limit);
     }
+    const segs = [...got.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+    for (const [d, h] of segs) { const day = dayOf(d); day.hours += h; day.byTask.push({ task: t, hours: h }); }
     const finish = blocked || rest > 1e-6 ? null : segs.length ? segs[segs.length - 1][0] : from;
     const res = { start: segs.length ? segs[0][0] : from, finish, segs, hours: need,
       late: !!(t.due && t.due >= today && (finish == null || finish > t.due)) };
@@ -1282,6 +1308,7 @@ function stampTimes(hours, nowMin) {
 }
 
 module.exports = {
+  dayRule, isWeekendDay,
   logsToStamp, logsToRestamp, targetProgress, stampTimes, timeReport, weekAverageBefore, logSpan,
   bodyOf, setFrontmatterLines, frontmatterOf,
   NO_TYPE, NO_PROJECT, DEFAULT_MULTIPLIER, categoryGroups, DUE_SORT, isDefaultSort,
