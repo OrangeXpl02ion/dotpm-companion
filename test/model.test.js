@@ -406,11 +406,16 @@ test("time report: per day, per hour, per type and project, budget comparison", 
   assert.deepEqual(M.logSpan({ start: "23:30", end: "00:30", hours: 1 }), [0, 0.5, 1]);
   assert.deepEqual(M.logSpan({ start: "22:00", hours: 3 }), [0, 1, 3]);
   assert.deepEqual(M.logSpan({ start: "09:00", end: "10:30", hours: 1.5 }), [9, 10.5, 1.5]);
-  // week: only days up to today count toward the average
+  // week: the average is over days with time logged (Mon has none), up to today
   const wk = M.timeReport(ts, cfg, mults, "2026-10-19", "2026-10-25", { today: "2026-10-21" });
   assert.equal(wk.days.length, 7); assert.equal(wk.hours, null);
-  assert.equal(wk.total, 4.75); assert.equal(wk.elapsed, 3);
-  assert.ok(Math.abs(wk.average - 4.75 / 3) < 1e-9);
+  assert.equal(wk.total, 4.75); assert.equal(wk.elapsed, 3); assert.equal(wk.loggedDays, 2);
+  assert.ok(Math.abs(wk.average - 4.75 / 2) < 1e-9);
+  // one logged day → the average is that day
+  const one = M.timeReport(ts, cfg, mults, "2026-10-19", "2026-10-25", { today: "2026-10-20" });
+  assert.equal(one.loggedDays, 1); assert.equal(one.average, one.days[1].total);
+  const none = M.timeReport(ts, cfg, mults, "2026-10-19", "2026-10-25", { today: "2026-10-19" });
+  assert.equal(none.loggedDays, 0); assert.equal(none.average, 0);
   assert.equal(wk.days[2].total, 3.75); assert.equal(wk.days[1].byType[M.NO_TYPE], 1);
   // average of earlier logged days in the week
   assert.deepEqual(M.weekAverageBefore(ts, "2026-10-21"), { average: 1, days: 1 });

@@ -1294,7 +1294,9 @@ function timeReport(tasks, cfg, mults, from, to, opts) {
   const elapsed = days.filter(d => d <= today);
   const available = days.reduce((a, d) => a + byDay[d].available, 0);
   return { from, to, days: days.map(d => byDay[d]), hours, untimed, total, byType, byProject, rows, available,
-    elapsed: elapsed.length, average: elapsed.length ? elapsed.reduce((a, d) => a + byDay[d].total, 0) / elapsed.length : 0 };
+    // average over the days with time logged (one logged day → that day's total), not every elapsed day
+    elapsed: elapsed.length, loggedDays: elapsed.filter(d => byDay[d].total > 0).length,
+    average: (n => n ? elapsed.reduce((a, d) => a + byDay[d].total, 0) / n : 0)(elapsed.filter(d => byDay[d].total > 0).length) };
 }
 // ---------- week projection (planned vs actual) ----------
 // What a week was expected to hold, split by work type, project and task. Three sources, best first:

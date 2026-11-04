@@ -1298,7 +1298,9 @@ function timeReport(tasks, cfg, mults, from, to, opts) {
   const elapsed = days.filter(d => d <= today);
   const available = days.reduce((a, d) => a + byDay[d].available, 0);
   return { from, to, days: days.map(d => byDay[d]), hours, untimed, total, byType, byProject, rows, available,
-    elapsed: elapsed.length, average: elapsed.length ? elapsed.reduce((a, d) => a + byDay[d].total, 0) / elapsed.length : 0 };
+    // average over the days with time logged (one logged day → that day's total), not every elapsed day
+    elapsed: elapsed.length, loggedDays: elapsed.filter(d => byDay[d].total > 0).length,
+    average: (n => n ? elapsed.reduce((a, d) => a + byDay[d].total, 0) / n : 0)(elapsed.filter(d => byDay[d].total > 0).length) };
 }
 // ---------- week projection (planned vs actual) ----------
 // What a week was expected to hold, split by work type, project and task. Three sources, best first:
@@ -2280,7 +2282,7 @@ function renderTime(body, st, on) {
       : "No earlier days logged this week";
   } else {
     big = fmtDur(R.average);
-    sub = `${fmtDur(R.total)} over ${R.elapsed} day${R.elapsed === 1 ? "" : "s"}`;
+    sub = R.loggedDays ? `${fmtDur(R.total)} over ${R.loggedDays} logged day${R.loggedDays === 1 ? "" : "s"}` : "No time logged yet";
   }
   const used = R.available > 0 ? `${Math.round((R.total / R.available) * 100)}%` : "—";
   body.append(h(doc, "div", { class: "dpc-time-head" },
@@ -2355,7 +2357,7 @@ function renderTime(body, st, on) {
       }
       svg.append(g);
     });
-    if (R.elapsed) {
+    if (R.loggedDays) {
       svg.append(s(doc, "line", { x1: padL, x2: W - padR, y1: y(R.average), y2: y(R.average), class: "dpc-time-avg" }));
       svg.append(s(doc, "text", { x: W - padR, y: y(R.average) - 5, class: "dpc-tick dpc-time-avg-label", "text-anchor": "end" }, `avg ${fmtDur(R.average)}`));
     }

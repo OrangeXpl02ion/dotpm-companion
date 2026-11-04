@@ -843,7 +843,7 @@ function renderTime(body, st, on) {
       : "No earlier days logged this week";
   } else {
     big = fmtDur(R.average);
-    sub = `${fmtDur(R.total)} over ${R.elapsed} day${R.elapsed === 1 ? "" : "s"}`;
+    sub = R.loggedDays ? `${fmtDur(R.total)} over ${R.loggedDays} logged day${R.loggedDays === 1 ? "" : "s"}` : "No time logged yet";
   }
   const used = R.available > 0 ? `${Math.round((R.total / R.available) * 100)}%` : "—";
   body.append(h(doc, "div", { class: "dpc-time-head" },
@@ -918,7 +918,7 @@ function renderTime(body, st, on) {
       }
       svg.append(g);
     });
-    if (R.elapsed) {
+    if (R.loggedDays) {
       svg.append(s(doc, "line", { x1: padL, x2: W - padR, y1: y(R.average), y2: y(R.average), class: "dpc-time-avg" }));
       svg.append(s(doc, "text", { x: W - padR, y: y(R.average) - 5, class: "dpc-tick dpc-time-avg-label", "text-anchor": "end" }, `avg ${fmtDur(R.average)}`));
     }
