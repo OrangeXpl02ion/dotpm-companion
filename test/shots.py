@@ -16,6 +16,7 @@ TIME_MUT=[T("Toaster CAD assembly",L("2026-10-16","13:00","16:00"),L("2026-10-19
 cases=[
  ("time_day",dict(tab="time",today="2026-10-21",nowHours=16.6,mutate=TIME_MUT,settings=dict(capacityDays={"2026-10-21":9.5}))),
  ("time_day_dark",dict(tab="time",dark=True,today="2026-10-21",nowHours=16.6,mutate=TIME_MUT)),
+ ("time_day_project",dict(tab="time",today="2026-10-21",nowHours=16.6,time=dict(group="project"),mutate=TIME_MUT)),
  ("time_week",dict(tab="time",today="2026-10-21",time=dict(mode="week",group="project"),mutate=TIME_MUT,settings=dict(capacityDays={"2026-10-19":9,"2026-10-20":6,"2026-10-21":9.5,"2026-10-22":8.5,"2026-10-23":10,"2026-10-24":9,"2026-10-25":9}))),
 
  ("capacity_light",dict(tab="capacity",expanded="2026-W45")),

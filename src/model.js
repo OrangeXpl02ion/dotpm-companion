@@ -1237,12 +1237,12 @@ function timeReport(tasks, cfg, mults, from, to, opts) {
   const o = opts || {};
   const days = [];
   for (let d = from; d <= to; d = addDays(d, 1)) days.push(d);
-  const byDay = Object.fromEntries(days.map(d => [d, { date: d, total: 0, byType: {}, available: availableOnDay(o.capacity || {}, d, o.defaultWeeklyHours || 0, o.capacityDays) }]));
+  const byDay = Object.fromEntries(days.map(d => [d, { date: d, total: 0, byType: {}, byProject: {}, available: availableOnDay(o.capacity || {}, d, o.defaultWeeklyHours || 0, o.capacityDays) }]));
   const byType = {}, byProject = {}, rows = [];
-  const bins = {}; // hour -> { type: hours }
+  const bins = {}, pbins = {}; // hour -> { type: hours } / { project: hours }
   let total = 0, untimed = 0, minH = 24, maxH = 0;
   for (const t of tasks) {
-    const k = typeKey(t);
+    const k = typeKey(t), pk = t.project || NO_PROJECT;
     let here = 0, before = 0;
     const sessions = [];
     for (const l of t.logs || []) {
@@ -1252,7 +1252,7 @@ function timeReport(tasks, cfg, mults, from, to, opts) {
       here += l.hours;
       sessions.push(l);
       const day = byDay[l.date];
-      day.total += l.hours; day.byType[k] = (day.byType[k] || 0) + l.hours;
+      day.total += l.hours; day.byType[k] = (day.byType[k] || 0) + l.hours; day.byProject[pk] = (day.byProject[pk] || 0) + l.hours;
       const sp = logSpan(l);
       if (!sp) { untimed += l.hours; continue; }
       // spread the log's hours over its clock range (hours logged can differ from the range)
@@ -1262,12 +1262,12 @@ function timeReport(tasks, cfg, mults, from, to, opts) {
         const ov = Math.min(sp[1], hr + 1) - Math.max(sp[0], hr);
         if (ov <= 0) continue;
         (bins[hr] = bins[hr] || {})[k] = ((bins[hr] || {})[k] || 0) + ov * scale;
+        (pbins[hr] = pbins[hr] || {})[pk] = ((pbins[hr] || {})[pk] || 0) + ov * scale;
       }
     }
     if (!(here > 0)) continue;
     total += here;
     byType[k] = (byType[k] || 0) + here;
-    const pk = t.project || NO_PROJECT;
     byProject[pk] = (byProject[pk] || 0) + here;
     const budget = t.estimate > 0 ? t.estimate * multiplierFor(mults, k) : null;
     sessions.sort((x, y) => (x.date + (x.start || "")).localeCompare(y.date + (y.start || "")));
@@ -1281,7 +1281,7 @@ function timeReport(tasks, cfg, mults, from, to, opts) {
     const w = (o.workWindow || DEFAULT_WINDOW)[weekdayOf(from) % 6 === 0 ? "weekend" : "weekday"] || DEFAULT_WINDOW.weekday;
     const a = Math.min(Math.floor(hm(w[0])), minH), b = Math.max(Math.ceil(hm(w[1])), maxH);
     hours = [];
-    for (let hr = a; hr < b; hr++) hours.push({ hour: hr, byType: bins[hr] || {}, total: Object.values(bins[hr] || {}).reduce((x, y) => x + y, 0) });
+    for (let hr = a; hr < b; hr++) hours.push({ hour: hr, byType: bins[hr] || {}, byProject: pbins[hr] || {}, total: Object.values(bins[hr] || {}).reduce((x, y) => x + y, 0) });
   }
   const today = o.today || to;
   const elapsed = days.filter(d => d <= today);

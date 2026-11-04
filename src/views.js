@@ -812,6 +812,12 @@ function renderTime(body, st, on) {
   const R = M.timeReport(st.tasks, cfg, mults, from, to, { capacity: st.settings.capacity || {}, capacityDays: st.settings.capacityDays,
     defaultWeeklyHours: st.settings.defaultWeeklyHours, workWindow: st.workWindow, today });
   const set = patch => on.setTime(patch);
+  // colour everything (chart, legend, task bars) by work type or by project, per the toggle
+  const byProj = T.group === "project";
+  const projColor = name => (st.projectColors && st.projectColors[name]) || "var(--dpc-none)";
+  const colorOf = k => byProj ? projColor(k) : typeColor(cfg, k);
+  const nameOf = k => byProj ? (k === M.NO_PROJECT ? "No project" : k) : typeName(k, cfg);
+  const pick = bucket => (byProj ? bucket.byProject : bucket.byType) || {};
   const step = n => { let d = M.addDays(T.date, n * (T.mode === "day" ? 1 : 7)); if (d > today) d = today; set({ date: d }); };
   const label = T.mode === "day" ? (T.date === today ? "Today" : T.date === M.addDays(today, -1) ? "Yesterday" : `${dowOf(T.date)} ${fmtD(T.date)}`)
     : (from === M.mondayOf(today) ? "This week" : `${fmtD(from)} – ${fmtD(to)}`);
@@ -824,7 +830,8 @@ function renderTime(body, st, on) {
       h(doc, "button", { "aria-label": T.mode === "day" ? "Previous day" : "Previous week", onclick: () => step(-1) }, "‹"),
       h(doc, "span", { class: "dpc-time-label" }, label),
       h(doc, "button", { "aria-label": T.mode === "day" ? "Next day" : "Next week", disabled: atEnd, onclick: () => step(1) }, "›"),
-      h(doc, "button", { class: "dpc-small", disabled: T.date === today, onclick: () => set({ date: today }) }, "Today"))));
+      h(doc, "button", { class: "dpc-small", disabled: T.date === today, onclick: () => set({ date: today }) }, "Today")),
+    seg([["type", "Work type"], ["project", "Project"]], T.group, g => set({ group: g }), "Colour by")));
 
   // headline
   let big, sub;
@@ -854,7 +861,7 @@ function renderTime(body, st, on) {
     el.addEventListener("mousemove", show); el.addEventListener("focus", show);
     el.addEventListener("mouseleave", () => tip.classList.remove("is-on")); el.addEventListener("blur", () => tip.classList.remove("is-on"));
   };
-  const keys = typeKeys(cfg), present = new Set();
+  const keys = byProj ? Object.keys(R.byProject).sort((x, y) => R.byProject[y] - R.byProject[x]) : typeKeys(cfg), present = new Set();
   const W = Math.max(320, Math.min(760, body.clientWidth || 640)), padL = 38, padR = 8, padT = 12, padB = 24;
   if (T.mode === "day") {
     const H = 170, hrs = R.hours, cw = (W - padL - padR) / hrs.length, y = m => padT + (H - padT - padB) * (1 - m / 60);
@@ -867,11 +874,11 @@ function renderTime(body, st, on) {
       const x = padL + i * cw + Math.min(3, cw * 0.12), bw = cw - 2 * Math.min(3, cw * 0.12);
       let acc = 0;
       for (const k of keys) {
-        const v = (b.byType[k] || 0) * 60;
+        const v = (pick(b)[k] || 0) * 60;
         if (v < 0.5) continue;
         present.add(k);
-        const r = s(doc, "rect", { x, width: bw, y: y(Math.min(60, acc + v)), height: Math.max(0, y(acc) - y(Math.min(60, acc + v))), rx: 2, style: `fill:${typeColor(cfg, k)}`, class: "dpc-seg-mark", tabindex: 0 });
-        hover(r, `${clock12(b.hour)}–${clock12(b.hour + 1)} · ${typeName(k, cfg)}: ${Math.round(v)}m`);
+        const r = s(doc, "rect", { x, width: bw, y: y(Math.min(60, acc + v)), height: Math.max(0, y(acc) - y(Math.min(60, acc + v))), rx: 2, style: `fill:${colorOf(k)}`, class: "dpc-seg-mark", tabindex: 0 });
+        hover(r, `${clock12(b.hour)}–${clock12(b.hour + 1)} · ${nameOf(k)}: ${Math.round(v)}m`);
         svg.append(r); acc += v;
       }
       if ((b.hour - hrs[0].hour) % 3 === 0) svg.append(s(doc, "text", { x: padL + i * cw, y: H - 6, class: "dpc-tick" }, clock12(b.hour)));
@@ -897,11 +904,11 @@ function renderTime(body, st, on) {
       if (d.available > 0) g.append(s(doc, "rect", { x, width: bw, y: y(d.available), height: y(0) - y(d.available), rx: 4, class: "dpc-time-avail" }));
       let acc = 0;
       for (const k of keys) {
-        const v = d.byType[k] || 0;
+        const v = pick(d)[k] || 0;
         if (v < 0.01) continue;
         present.add(k);
-        const r = s(doc, "rect", { x, width: bw, y: y(acc + v), height: Math.max(0, y(acc) - y(acc + v)), rx: 2, style: `fill:${typeColor(cfg, k)}` });
-        hover(r, `${dowOf(d.date)} ${fmtD(d.date)} · ${typeName(k, cfg)}: ${fmtDur(v)} of ${fmtDur(d.total)}`);
+        const r = s(doc, "rect", { x, width: bw, y: y(acc + v), height: Math.max(0, y(acc) - y(acc + v)), rx: 2, style: `fill:${colorOf(k)}` });
+        hover(r, `${dowOf(d.date)} ${fmtD(d.date)} · ${nameOf(k)}: ${fmtDur(v)} of ${fmtDur(d.total)}`);
         g.append(r); acc += v;
       }
       g.append(s(doc, "text", { x: x + bw / 2, y: H - 6, class: "dpc-tick" + (d.date === today ? " is-current" : ""), "text-anchor": "middle" }, dowOf(d.date)));
@@ -918,7 +925,7 @@ function renderTime(body, st, on) {
     wrap.append(svg, tip);
   }
   const lg = h(doc, "div", { class: "dpc-legend" }, keys.filter(k => present.has(k)).map(k =>
-    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, k)}` }), typeName(k, cfg))),
+    h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch", style: `background:${colorOf(k)}` }), nameOf(k))),
     T.mode === "week" ? h(doc, "span", { class: "dpc-legend-item" }, h(doc, "span", { class: "dpc-swatch dpc-time-avail-sw" }), "Available") : null);
   body.append(wrap, lg);
   if (T.mode === "day" && R.untimed > 0.01) body.append(h(doc, "p", { class: "dpc-muted dpc-time-note" }, `${fmtDur(R.untimed)} logged without a start and end time is in the total but not on the chart. Logs you add in dotpm from now on get times automatically.`));
@@ -927,13 +934,11 @@ function renderTime(body, st, on) {
   if (!R.rows.length) { body.append(h(doc, "p", { class: "dpc-muted" }, T.mode === "day" ? "No time logged on this day." : "No time logged this week.")); return; }
 
   // where the time went
-  const projColor = name => (st.projectColors && st.projectColors[name]) || "var(--dpc-none)";
   const groups = T.group === "type"
     ? Object.entries(R.byType).map(([k, v]) => ({ name: typeName(k, cfg), v, color: typeColor(cfg, k) }))
     : Object.entries(R.byProject).map(([k, v]) => ({ name: k === M.NO_PROJECT ? "No project" : k, v, color: projColor(k) }));
   groups.sort((a, b) => b.v - a.v);
-  body.append(h(doc, "div", { class: "dpc-time-sec" }, h(doc, "h4", { class: "dpc-h" }, "Where the time went"),
-    seg([["type", "Work type"], ["project", "Project"]], T.group, g => set({ group: g }), "Group by")));
+  body.append(h(doc, "div", { class: "dpc-time-sec" }, h(doc, "h4", { class: "dpc-h" }, byProj ? "Where the time went, by project" : "Where the time went, by work type")));
   body.append(h(doc, "div", { class: "dpc-time-groups" }, groups.map(g => h(doc, "div", { class: "dpc-time-group" },
     h(doc, "span", { class: "dpc-swatch", style: `background:${g.color}` }), h(doc, "span", { class: "dpc-time-gname" }, g.name),
     h(doc, "span", { class: "dpc-muted dpc-num" }, `${fmtDur(g.v)} · ${Math.round((g.v / R.total) * 100)}%`),
@@ -948,7 +953,7 @@ function renderTime(body, st, on) {
   const scale = Math.max(1, ...R.rows.map(r => Math.max(r.budget || 0, r.logged)));
   const pct = v => `${(Math.min(v, scale) / scale) * 100}%`;
   body.append(h(doc, "div", { class: "dpc-time-rows" }, R.rows.map(r => {
-    const t = r.task, color = typeColor(cfg, r.type), beforeIn = Math.min(r.before, r.budget != null ? r.budget : r.before);
+    const t = r.task, color = byProj ? projColor(t.project || M.NO_PROJECT) : typeColor(cfg, r.type), beforeIn = Math.min(r.before, r.budget != null ? r.budget : r.before);
     const capped = r.budget != null ? Math.min(r.before + r.here, r.budget) : r.before + r.here;
     const status = r.budget == null ? "no estimate"
       : r.over ? `over by ${fmtDur(r.logged - r.budget)}` : r.done ? "finished" : `${fmtDur(r.budget - r.logged)} left`;
@@ -956,7 +961,7 @@ function renderTime(body, st, on) {
     return h(doc, "div", { class: "dpc-time-row" },
       h(doc, "div", { class: "dpc-time-rtop" },
         h(doc, "div", { class: "dpc-time-rname" }, taskLink(doc, t, on),
-          h(doc, "div", { class: "dpc-muted dpc-time-meta" }, t.project || "No project", " · ", h(doc, "span", { class: "dpc-swatch", style: `background:${color}` }), typeName(r.type, cfg),
+          h(doc, "div", { class: "dpc-muted dpc-time-meta" }, t.project || "No project", " · ", h(doc, "span", { class: "dpc-swatch", style: `background:${typeColor(cfg, r.type)}` }), typeName(r.type, cfg),
             t.estimate > 0 ? ` · est ${fmtH(t.estimate)} × ${fmtX(M.multiplierFor(mults, r.type))}` : "")),
         h(doc, "span", { class: "dpc-time-here dpc-num" }, fmtDur(r.here))),
       h(doc, "div", { class: "dpc-time-cmp" },
