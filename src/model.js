@@ -832,7 +832,8 @@ function parseQuickAdd(text, ctx) {
 //   "2-3:30pm sanding"  "14:00-15:30"  "9am–noon" → that range; hours from the range
 //   "1.5 at 2pm"  "2h from 14:00"                 → starts then, ends that much later
 // `nowMin` = minutes after midnight (defaults to the whole-day case with no times).
-// Returns { hours, note, start, end, dayOffset } — start/end "HH:MM"; dayOffset -1 when the work began yesterday.
+// Returns { hours, note, start, end, dayOffset } — start/end "HH:MM". Work that crosses midnight is dated the day it ended
+// (today), so dayOffset is always 0 here.
 const CLOCK = String.raw`(noon|midnight|\d{1,2}(?::\d{2})?\s*(?:am|pm|a|p)?)`;
 function clockMin(txt, pmHint) {
   const s = String(txt).trim().toLowerCase();
@@ -889,13 +890,15 @@ function parseLogInput(text, nowMin) {
   if (startMin == null && typeof nowMin === "number") { endMin = nowMin; startMin = nowMin - hours * 60; }
   if (startMin != null) {
     if (endMin == null) endMin = startMin + hours * 60;
-    out.dayOffset = startMin < 0 ? -1 : 0;
+    out.dayOffset = 0; // crossing midnight → dated the following day (today)
     out.start = fmtClock(startMin); out.end = fmtClock(endMin);
   }
   return out;
 }
 // Log time from separate fields (the Log time box): start and end clock times, hours, note. The date isn't a field —
-// it's today, or yesterday when the work began before midnight.
+// it's today. Work that crosses midnight is dated the following day (the day it ended); only a range that ended
+// before now without crossing midnight while starting later in the day than now (23:00–23:40 logged at 00:30) is
+// dated yesterday.
 //   start + end      → that range (end before start = past midnight)
 //   start + hours    → ends `hours` later          end + hours → began `hours` earlier
 //   start only       → ends now                    hours only  → ends now
@@ -932,17 +935,16 @@ function logFromFields(f, nowMin) {
   else return { error: "Give a start and end time, or hours." };
   if (!(hours > 0) || hours > 24) return { error: "That's more than 24 hours." };
   hours = Math.round(hours * 100) / 100;
-  // which day did it start? Before midnight → yesterday: the range wraps (start later than end) and has already
-  // ended today, or the start is still ahead of now (it must have been last night).
+  // which day? The day the work ended. A range crossing midnight ended today (the following day); a range that
+  // doesn't cross midnight but starts later than now must have been last night, so it's yesterday's.
   const S = ((s % 1440) + 1440) % 1440, E = ((e % 1440) + 1440) % 1440, wraps = s < 0 || S > E || e >= 1440;
   let dayOffset = 0;
-  if (s < 0) dayOffset = -1;
-  else if (now != null && (wraps ? E <= now && S > now : S > now)) dayOffset = -1;
+  if (!wraps && now != null && S > now) dayOffset = -1;
   return { hours, note: String(f.note || "").trim(), start: fmtClock(S), end: fmtClock(E), dayOffset };
 }
 function describeLog(v) {
   if (!v) return "";
-  const when = v.start ? `${v.dayOffset ? "yesterday" : "today"} ${v.start}–${v.end}` : "today";
+  const when = v.start ? `${v.dayOffset ? "yesterday" : "today"} ${v.start}–${v.end}${v.start > v.end ? " (from last night)" : ""}` : "today";
   return `${v.hours}h, ${when}${v.note ? ` — “${v.note}”` : ""}`;
 }
 
@@ -1226,12 +1228,17 @@ function setFrontmatterLines(text, fields) {
 // single day); logs without one only count in the totals ("untimed"). A range that runs past midnight
 // is cut at midnight. `budget` is estimate × multiplier, the same figure the planner uses.
 // opts: { capacity, capacityDays, defaultWeeklyHours, workWindow, today }
+// The log's clock span on its date, as [from, to, fullLength] in hours. A log that crosses midnight is dated the day
+// it ended, so on that day it covers 00:00 → end (the part before midnight isn't on that day's chart); fullLength is
+// the whole range so its hours are spread at the right rate.
 function logSpan(l) {
   const e = l.end ? hm(l.end) : null, s0 = l.start ? hm(l.start) : null;
   if (s0 == null && e == null) return null;
   let a = s0 != null ? s0 : e - l.hours, b = e != null ? e : s0 + l.hours;
-  if (b <= a) b = 24; // ran past midnight
-  return [Math.max(0, a), Math.min(24, b)];
+  if (b > 24) { const len = b - a; return [0, b - 24, len]; } // start + hours ran past midnight
+  if (a < 0) return [0, b, b - a];
+  if (b <= a) { const len = 24 - a + b; return b > 0 ? [0, b, len] : [a, 24, len]; } // crossed midnight
+  return [a, b, b - a];
 }
 function timeReport(tasks, cfg, mults, from, to, opts) {
   const o = opts || {};
@@ -1256,7 +1263,7 @@ function timeReport(tasks, cfg, mults, from, to, opts) {
       const sp = logSpan(l);
       if (!sp) { untimed += l.hours; continue; }
       // spread the log's hours over its clock range (hours logged can differ from the range)
-      const scale = l.hours / Math.max(1 / 60, sp[1] - sp[0]);
+      const scale = l.hours / Math.max(1 / 60, sp[2] || sp[1] - sp[0]);
       minH = Math.min(minH, Math.floor(sp[0])); maxH = Math.max(maxH, Math.ceil(sp[1]));
       for (let hr = Math.floor(sp[0]); hr < sp[1]; hr++) {
         const ov = Math.min(sp[1], hr + 1) - Math.max(sp[0], hr);
@@ -1399,7 +1406,8 @@ function logsToRestamp(before, after) {
 // Start and end for a log noticed at `nowMin` (minutes after midnight): it ends then and started `hours` earlier,
 // never before midnight.
 function stampTimes(hours, nowMin) {
-  const end = Math.round(nowMin), start = Math.max(0, end - Math.round(hours * 60));
+  // dotpm dates the log today, the day it ended; a start before midnight wraps (00:30 for 2h → 22:30–00:30)
+  const end = Math.round(nowMin), start = end - Math.round(hours * 60);
   return { start: fmtClock(start), end: fmtClock(end) };
 }
 

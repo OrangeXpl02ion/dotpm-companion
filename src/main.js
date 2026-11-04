@@ -1052,8 +1052,8 @@ class FileSuggestModal extends FuzzySuggestModal {
   getItemText(f) { return f.basename; }
   onChooseItem(f) { this.onPick(f); }
 }
-// Log time: separate Start / End / Hours / Note fields. The date isn't a field — it's today, or yesterday when the
-// work began before midnight (shown, not editable). Any two of start, end and hours are enough; one alone ends now.
+// Log time: separate Start / End / Hours / Note fields. The date isn't a field — it's today; work that crosses
+// midnight is dated the following day, the day it ended (shown, not editable). Any two of start, end and hours are enough; one alone ends now.
 class LogTimeModal extends Modal {
   constructor(plugin, task) { super(plugin.app); this.plugin = plugin; this.task = task; }
   onOpen() {

@@ -3,7 +3,10 @@
 // dotpm draws each log as a row: date · hours · note · ×, bound to a log object in the editor's draft task
 // (`editor.task.timeLogs[i]`), and writes the draft when you press Save. We add two time inputs after the date and
 // write `start` / `end` onto that same object, so dotpm saves them with the rest (it copies log objects whole).
-// Both times set → hours follow. Hours changed with a start set → end follows. The date stays dotpm's.
+// Both times set → hours follow. Hours changed with a start set → end follows.
+// Work that crosses midnight is logged on the following day (the day it ended): when a range starts crossing
+// midnight on a row dated before today, its date moves one day later (never past today); if it stops crossing,
+// the date moves back. A row dated today (dotpm's default for a new log) keeps its date.
 // No Obsidian imports, so it can run against a fake page in tests.
 const M = require("./model");
 
@@ -12,6 +15,16 @@ const ROW = "pm-time-log-row", LIST = "pm-time-log-list", MARK = "dpcTimes";
 function toMin(v) { const c = M.normClock(v); if (!c) return null; const [h, m] = c.split(":").map(Number); return h * 60 + m; }
 const round2 = x => Math.round(x * 100) / 100;
 
+const crosses = log => { const s = toMin(log.start), e = toMin(log.end); return s != null && e != null && e <= s; };
+// Move the date when a range starts or stops crossing midnight. `bumped` = we moved it forward earlier.
+// Returns the new bumped state.
+function shiftForMidnight(log, wasCrossing, bumped, today) {
+  const now = crosses(log), d = M.normDate(log.date);
+  if (!d) return bumped;
+  if (now && !wasCrossing && !bumped && M.addDays(d, 1) <= today) { log.date = M.addDays(d, 1); return true; }
+  if (!now && wasCrossing && bumped) { log.date = M.addDays(d, -1); return false; }
+  return bumped;
+}
 // Apply a change to one log. `which` is "start", "end" or "hours"; returns what the row should now show.
 function applyTimes(log, which, value) {
   if (which === "start" || which === "end") {
@@ -54,10 +67,14 @@ function enhanceRow(row, log) {
   wrap.append(start, dash, end, now);
   if (date && date.nextSibling) row.insertBefore(wrap, date.nextSibling); else row.insertBefore(wrap, hours);
   const show = v => { start.value = v.start; end.value = v.end; hours.value = String(v.hours); };
+  let bumped = false;
   const onTime = which => () => {
+    const was = crosses(log), oldDate = log.date;
     const v = applyTimes(log, which, which === "start" ? start.value : end.value);
+    bumped = shiftForMidnight(log, was, bumped, M.localToday());
     show(v);
     hours.dispatchEvent(new Event("change", { bubbles: true })); // dotpm reads the hours box back into the log
+    if (date && log.date !== oldDate) { date.value = log.date; date.dispatchEvent(new Event("change", { bubbles: true })); }
   };
   start.addEventListener("change", onTime("start"));
   end.addEventListener("change", onTime("end"));
@@ -95,4 +112,4 @@ function watch(doc, findLogs) {
   return { scan, stop: () => obs.disconnect() };
 }
 
-module.exports = { applyTimes, enhanceRow, enhanceList, watch };
+module.exports = { applyTimes, shiftForMidnight, crosses, enhanceRow, enhanceList, watch };

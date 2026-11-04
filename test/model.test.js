@@ -245,7 +245,7 @@ test("time log input", () => {
   assert.deepEqual(M.parseLogInput("1.5h at 10am cad", now), { hours: 1.5, note: "cad", start: "10:00", end: "11:30", dayOffset: 0 });
   assert.deepEqual(M.parseLogInput("2h from 14:00", now), { hours: 2, note: "", start: "14:00", end: "16:00", dayOffset: 0 });
   assert.deepEqual(M.parseLogInput("2 polishing", now).note, "polishing", "a note starting with p isn't read as pm");
-  assert.deepEqual(M.parseLogInput("2h", 30), { hours: 2, note: "", start: "22:30", end: "00:30", dayOffset: -1 }, "began yesterday");
+  assert.deepEqual(M.parseLogInput("2h", 30), { hours: 2, note: "", start: "22:30", end: "00:30", dayOffset: 0 }, "crossed midnight → dated today, the day it ended");
   assert.equal(M.parseLogInput("2-4 legs", now), null, "bare 2-4 is neither hours nor a clear range");
   assert.equal(M.parseLogInput("13pm-2pm", now), null);
   assert.equal(M.normClock(836), "13:56", "base-60 number from old YAML");
@@ -398,10 +398,14 @@ test("time report: per day, per hour, per type and project, budget comparison", 
   assert.equal(pr.budget, 1); assert.equal(pr.over, true); assert.equal(pr.done, true);
   assert.equal(day.rows[0].task.title, "CAD part"); // sorted by time here
   assert.equal(day.rows.find(r => r.task.title === "Notes").budget, null);
-  // run past midnight is cut at midnight on its own date
+  // a log crossing midnight is dated the day it ended: that day's chart has the part after midnight
   const tue = M.timeReport(ts, cfg, mults, "2026-10-20", "2026-10-20", {});
-  assert.equal(tue.total, 1);
-  assert.equal(tue.hours[tue.hours.length - 1].hour, 23);
+  assert.equal(tue.total, 1, "all its hours count on its date");
+  assert.equal(tue.hours[0].hour, 0, "axis widens to midnight");
+  assert.ok(Math.abs(tue.hours[0].total - 0.5) < 1e-9, "00:00–00:30 at the log's real rate");
+  assert.deepEqual(M.logSpan({ start: "23:30", end: "00:30", hours: 1 }), [0, 0.5, 1]);
+  assert.deepEqual(M.logSpan({ start: "22:00", hours: 3 }), [0, 1, 3]);
+  assert.deepEqual(M.logSpan({ start: "09:00", end: "10:30", hours: 1.5 }), [9, 10.5, 1.5]);
   // week: only days up to today count toward the average
   const wk = M.timeReport(ts, cfg, mults, "2026-10-19", "2026-10-25", { today: "2026-10-21" });
   assert.equal(wk.days.length, 7); assert.equal(wk.hours, null);
@@ -433,7 +437,7 @@ test("which dotpm logs get times added", () => {
   const untimed = [{ date: T, hours: 1, note: "a" }];
   assert.deepEqual(M.logsToStamp(untimed, [{ date: T, hours: 1, note: "ab" }], T), []);
   assert.deepEqual(M.stampTimes(1.5, 17 * 60 + 10), { start: "15:40", end: "17:10" });
-  assert.deepEqual(M.stampTimes(2, 60), { start: "00:00", end: "01:00" });
+  assert.deepEqual(M.stampTimes(2, 60), { start: "23:00", end: "01:00" }, "start wraps to last night; date stays today");
 });
 
 test("done sets progress to 100 regardless of the checklist", () => {
@@ -538,9 +542,9 @@ test("time log fields (start / end / hours, date automatic)", () => {
   assert.deepEqual(L({ start: "19:45" }), { hours: 1, note: "", start: "19:45", end: "20:45", dayOffset: 0 }, "start only ends now");
   assert.equal(L({ start: "19:03", end: "20:30", hours: "5" }).hours, 1.45, "both times win over hours");
   // past midnight
-  assert.deepEqual(L({ start: "23:00", end: "01:00" }, 90), { hours: 2, note: "", start: "23:00", end: "01:00", dayOffset: -1 }, "began last night");
+  assert.deepEqual(L({ start: "23:00", end: "01:00" }, 90), { hours: 2, note: "", start: "23:00", end: "01:00", dayOffset: 0 }, "crossed midnight → the following day (today)");
   assert.equal(L({ start: "23:00", end: "23:30" }, 30).dayOffset, -1, "start still ahead of now → last night");
-  assert.equal(L({ hours: "2" }, 30).dayOffset, -1);
+  assert.equal(L({ hours: "2" }, 30).dayOffset, 0);
   assert.equal(L({ start: "22:00", hours: "3" }, 23 * 60 + 30).end, "01:00");
   // errors
   assert.ok(L({}).error); assert.ok(L({ end: "20:00" }).error);
@@ -558,4 +562,16 @@ test("dotpm task page: start/end fields on a time log", () => {
   assert.equal(DT.applyTimes({ hours: 0 }, "start", "23:30") && DT.applyTimes(Object.assign({ hours: 0, start: "23:30" }), "end", "00:15").hours, 0.75, "past midnight");
   const l2 = { hours: 1, end: "10:00" }; assert.equal(DT.applyTimes(l2, "hours", "1.5").start, "08:30", "end only → start moves");
   const l3 = { hours: 1, start: "09:00", end: "10:00" }; DT.applyTimes(l3, "start", ""); assert.ok(!("start" in l3), "cleared time removed");
+});
+
+test("dotpm task page: crossing midnight moves the date to the following day", () => {
+  const DT = require("../src/dotpmtime");
+  const T = "2026-11-04";
+  const a = { date: "2026-11-03", start: "23:33", end: "00:39", hours: 1.1 };
+  assert.equal(DT.shiftForMidnight(a, false, false, T), true); assert.equal(a.date, "2026-11-04", "Nov 3 night → Nov 4");
+  a.end = "23:50"; assert.equal(DT.shiftForMidnight(a, true, true, T), false); assert.equal(a.date, "2026-11-03", "no longer crossing → back");
+  const b = { date: T, start: "23:33", end: "00:39" };
+  DT.shiftForMidnight(b, false, false, T); assert.equal(b.date, T, "never past today");
+  const c = { date: "2026-11-01", start: "23:00", end: "01:00" };
+  assert.equal(DT.shiftForMidnight(c, true, false, T), false); assert.equal(c.date, "2026-11-01", "already crossing when opened: left alone");
 });
