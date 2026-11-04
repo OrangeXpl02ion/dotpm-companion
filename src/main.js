@@ -1,5 +1,6 @@
 "use strict";
 const { Plugin, ItemView, PluginSettingTab, Setting, Notice, TFile, TFolder, Modal, FuzzySuggestModal, Menu, Platform, Scope, normalizePath, debounce, parseYaml } = require("obsidian");
+const DT = require("./dotpmtime");
 const M = require("./model");
 const V = require("./views");
 
@@ -48,6 +49,7 @@ const DEFAULTS = {
   timeMode: "day",
   timeGroup: "type",
   stampDotpmLogs: true,
+  dotpmTimeFields: true,
   queueOrder: [],     // task ids in the order you dragged them in the Today queue
   workSharePct: 45,   // share of open time (Capacity) a day's queue placement fills
 };
@@ -228,6 +230,7 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     this.addCommand({ id: "open-projects", name: "Open project progress", callback: () => this.activateView("projects") });
     this.addCommand({ id: "quick-add", name: "Quick add task", callback: () => new QuickAddModal(this).open() });
     this.addCommand({ id: "quick-capacity", name: "Quick capacity (change a day's hours)", callback: () => new QuickCapacityModal(this).open() });
+    this.setupDotpmTimeFields();
     this.addCommand({ id: "log-time", name: "Log time…", callback: () => this.logTimePicker() });
     this.addCommand({ id: "log-time-here", name: "Log time on this task", checkCallback: checking => {
       const f = this.app.workspace.getActiveFile(); const t = f && this.tasks.get(f.path);
@@ -266,6 +269,42 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
       }, 60 * 1000));
       if (this.settings.openOnStartup && !this.app.workspace.getLeavesOfType(VIEW_TYPE).length) this.activateView("dotpm");
     });
+  }
+  // ---- Start/End fields in dotpm's task page ----
+  // dotpm's task editor keeps the task being edited (a draft copy) on `editor.task`; a task tab holds it as
+  // `leaf.view.editor`, a task modal as `modal.editor`. Modals aren't reachable from the workspace, so we note them
+  // as they open. Each lookup is guarded: these are dotpm internals.
+  setupDotpmTimeFields() {
+    const self = this, proto = Modal.prototype;
+    this.taskEditorModals = new Set();
+    if (proto.open && !proto.open.__dpc) {
+      const orig = proto.open;
+      const wrapped = function () {
+        try { const ed = this && this.editor; if (ed && ed.task && "containerEl" in ed) { self.taskEditorModals.add(this); } } catch (e) { /* not ours to break */ }
+        return orig.apply(this, arguments);
+      };
+      wrapped.__dpc = orig;
+      proto.open = wrapped;
+      this.register(() => { if (proto.open === wrapped) proto.open = orig; });
+    }
+    const findLogs = list => {
+      const hosts = [];
+      for (const m of this.taskEditorModals) { if (!m.containerEl || !m.containerEl.isConnected) { this.taskEditorModals.delete(m); continue; } hosts.push([m.editor, m.contentEl]); }
+      this.app.workspace.iterateAllLeaves(l => { const ed = l.view && l.view.editor; if (ed && ed.task && "containerEl" in ed) hosts.push([ed, l.view.contentEl]); });
+      const hit = hosts.find(([ed, root]) => (ed.containerEl && ed.containerEl.contains(list)) || (root && root.contains(list)));
+      if (!hit) return null;
+      const t = hit[0].task;
+      if (!Array.isArray(t.timeLogs)) t.timeLogs = [];
+      return t.timeLogs;
+    };
+    const start = () => {
+      if (this.dotpmTimeWatch || !this.settings.dotpmTimeFields) return;
+      try { this.dotpmTimeWatch = DT.watch(document, findLogs); } catch (e) { console.warn("[dotpm-companion] could not add time fields to dotpm", e); }
+    };
+    this.stopDotpmTimeFields = () => { if (this.dotpmTimeWatch) { this.dotpmTimeWatch.stop(); this.dotpmTimeWatch = null; } };
+    this.startDotpmTimeFields = start;
+    this.app.workspace.onLayoutReady(start);
+    this.register(() => this.stopDotpmTimeFields());
   }
   onunload() { for (const t of this.pendingProgress.values()) clearTimeout(t); for (const p of (this.pendingStamp || new Map()).values()) clearTimeout(p.timer); if (this.logTimer) { clearTimeout(this.logTimer); this.flushScheduleLog(); } }
 
@@ -950,6 +989,8 @@ class CompanionSettings extends PluginSettingTab {
       .addToggle(t => t.setValue(S.workTypeFromProject).onChange(async v => { S.workTypeFromProject = v; await p.saveSettings(); }));
     new Setting(el).setName("Add times to logs made in dotpm").setDesc("dotpm's time panel saves only the date and hours. When you add a log there, the companion sets its end to when it noticed the log and its start that many hours earlier, so the Time tab can place it in the day. Only the computer you're using does this.")
       .addToggle(t => t.setValue(S.stampDotpmLogs).onChange(async v => { S.stampDotpmLogs = v; await p.saveSettings(); }));
+    new Setting(el).setName("Start and end times in dotpm's task page").setDesc("Adds Start – End time fields (and a “now” button) to each log in dotpm's Time tracking section. Setting both times fills the hours; changing the hours moves the end. Saved with dotpm's Save. Reopen the task to see a change.")
+      .addToggle(t => t.setValue(S.dotpmTimeFields).onChange(async v => { S.dotpmTimeFields = v; await p.saveSettings(); if (v) p.startDotpmTimeFields(); else p.stopDotpmTimeFields(); }));
     new Setting(el).setName("Quick-add default project").setDesc("Where a quick-added task goes when the line names no project.")
       .addDropdown(d => { for (const k of Object.keys(p.projectNotes).sort()) d.addOption(p.projectNotes[k].title, p.projectNotes[k].title); d.setValue(S.quickAddProject).onChange(async v => { S.quickAddProject = v; await p.saveSettings(); }); });
     new Setting(el).setName("Templates folder").setDesc("Notes with a task table, used by “New project from template”.")

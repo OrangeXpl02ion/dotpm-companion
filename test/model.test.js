@@ -546,3 +546,16 @@ test("time log fields (start / end / hours, date automatic)", () => {
   assert.ok(L({}).error); assert.ok(L({ end: "20:00" }).error);
   assert.ok(L({ start: "25:00", end: "20:00" }).error); assert.ok(L({ hours: "lots" }).error); assert.ok(L({ hours: "30" }).error);
 });
+
+test("dotpm task page: start/end fields on a time log", () => {
+  const DT = require("../src/dotpmtime");
+  const log = { date: "2026-11-03", hours: 0, note: "slides", extra: 1 };
+  assert.deepEqual(DT.applyTimes(log, "start", "19:03"), { start: "19:03", end: "", hours: 0 }, "one time alone leaves hours");
+  assert.deepEqual(DT.applyTimes(log, "end", "20:30"), { start: "19:03", end: "20:30", hours: 1.45 }, "both → hours");
+  assert.deepEqual(DT.applyTimes(log, "hours", "2"), { start: "19:03", end: "21:03", hours: 2 }, "hours with a start → end moves");
+  assert.equal(log.extra, 1, "other fields kept");
+  assert.equal(log.date, "2026-11-03", "date untouched");
+  assert.equal(DT.applyTimes({ hours: 0 }, "start", "23:30") && DT.applyTimes(Object.assign({ hours: 0, start: "23:30" }), "end", "00:15").hours, 0.75, "past midnight");
+  const l2 = { hours: 1, end: "10:00" }; assert.equal(DT.applyTimes(l2, "hours", "1.5").start, "08:30", "end only → start moves");
+  const l3 = { hours: 1, start: "09:00", end: "10:00" }; DT.applyTimes(l3, "start", ""); assert.ok(!("start" in l3), "cleared time removed");
+});

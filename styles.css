@@ -354,3 +354,10 @@
 .dpc-board-days .dpc-col { flex: 1 0 140px; min-width: 140px; padding: 8px 6px 10px; }
 .dpc-board-days .dpc-col-sub { flex-wrap: wrap; }
 .dpc-board-days .dpc-col.is-past { opacity: .75; }
+
+/* Start – End fields added to dotpm's time log rows (0.22.0) */
+.pm-time-log-row .dpc-tl-times { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.pm-time-log-row .dpc-tl-time { width: 118px; font-variant-numeric: tabular-nums; }
+.pm-time-log-row .dpc-tl-dash { color: var(--text-muted); }
+.pm-time-log-row .dpc-tl-now { font-size: 0.8em; color: var(--text-muted); padding: 2px 6px; height: auto; }
+@media (max-width: 600px) { .pm-time-log-row { flex-wrap: wrap; } }
