@@ -894,6 +894,52 @@ function parseLogInput(text, nowMin) {
   }
   return out;
 }
+// Log time from separate fields (the Log time box): start and end clock times, hours, note. The date isn't a field —
+// it's today, or yesterday when the work began before midnight.
+//   start + end      → that range (end before start = past midnight)
+//   start + hours    → ends `hours` later          end + hours → began `hours` earlier
+//   start only       → ends now                    hours only  → ends now
+// Clock fields take "19:03" (a time input's value) or "7:03pm", "7:03p", "noon". Hours take "1.5", "1h30m", "90m".
+// Returns { hours, note, start, end, dayOffset } like parseLogInput, or { error } saying what's missing or wrong.
+function parseClockField(txt) {
+  const s = String(txt == null ? "" : txt).trim();
+  if (!s) return { empty: true };
+  const m = clockMin(s, null);
+  return m == null ? { bad: true } : { min: m };
+}
+function parseHoursField(txt) {
+  const s = String(txt == null ? "" : txt).trim();
+  if (!s) return { empty: true };
+  const m = s.match(/^(?:(\d+(?:\.\d+)?)\s*h(?:ours?|rs?)?\s*(?:(\d+)\s*m(?:in)?)?|(\d+)\s*m(?:in)?|(\d+(?:\.\d+)?))$/i);
+  if (!m) return { bad: true };
+  const h = m[1] != null ? parseFloat(m[1]) + (m[2] ? Number(m[2]) / 60 : 0) : m[3] != null ? Number(m[3]) / 60 : parseFloat(m[4]);
+  return h > 0 && h <= 24 ? { hours: h } : { bad: true };
+}
+function logFromFields(f, nowMin) {
+  f = f || {};
+  const a = parseClockField(f.start), b = parseClockField(f.end), h = parseHoursField(f.hours);
+  if (a.bad) return { error: "Start time isn't a time (try 19:03 or 7:03pm)." };
+  if (b.bad) return { error: "End time isn't a time (try 20:30 or 8:30pm)." };
+  if (h.bad) return { error: "Hours should be like 1.5, 1h30m or 90m (up to 24)." };
+  const now = typeof nowMin === "number" ? nowMin : null;
+  let s = a.min, e = b.min, hours = h.hours;
+  if (s != null && e != null) { let len = e - s; if (len <= 0) len += 1440; hours = len / 60; }
+  else if (s != null && hours != null) e = s + hours * 60;
+  else if (e != null && hours != null) s = e - hours * 60;
+  else if (s != null) { if (now == null) return { error: "Give an end time or hours." }; e = now; let len = e - s; if (len <= 0) len += 1440; hours = len / 60; }
+  else if (hours != null) { if (now == null) return { error: "Give a start or end time." }; e = now; s = now - hours * 60; }
+  else if (e != null) return { error: "Give a start time or hours as well." };
+  else return { error: "Give a start and end time, or hours." };
+  if (!(hours > 0) || hours > 24) return { error: "That's more than 24 hours." };
+  hours = Math.round(hours * 100) / 100;
+  // which day did it start? Before midnight → yesterday: the range wraps (start later than end) and has already
+  // ended today, or the start is still ahead of now (it must have been last night).
+  const S = ((s % 1440) + 1440) % 1440, E = ((e % 1440) + 1440) % 1440, wraps = s < 0 || S > E || e >= 1440;
+  let dayOffset = 0;
+  if (s < 0) dayOffset = -1;
+  else if (now != null && (wraps ? E <= now && S > now : S > now)) dayOffset = -1;
+  return { hours, note: String(f.note || "").trim(), start: fmtClock(S), end: fmtClock(E), dayOffset };
+}
 function describeLog(v) {
   if (!v) return "";
   const when = v.start ? `${v.dayOffset ? "yesterday" : "today"} ${v.start}–${v.end}` : "today";
@@ -1368,7 +1414,7 @@ module.exports = {
   typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, suggestOrder, isStarted, startsLater, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute, availableOnDay, dayLeftShare, hoursUntil,
   linkTarget, baseName, isReady, measuredSeries, board, boardDays, shiftToDay, shiftToWeek, queueOrder, moveInOrder, dayBudget, placeQueue, workedShare,
-  parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput,
+  parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput, logFromFields,
   dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,
   parseCapacityDays, parseCapacityInput, describeLog, normClock, fmtClock, dayUsable, dayLabel, adjustmentNote, planAdjustment, addToRules, removeLastFromRules,

@@ -1011,27 +1011,62 @@ class FileSuggestModal extends FuzzySuggestModal {
   getItemText(f) { return f.basename; }
   onChooseItem(f) { this.onPick(f); }
 }
+// Log time: separate Start / End / Hours / Note fields. The date isn't a field — it's today, or yesterday when the
+// work began before midnight (shown, not editable). Any two of start, end and hours are enough; one alone ends now.
 class LogTimeModal extends Modal {
   constructor(plugin, task) { super(plugin.app); this.plugin = plugin; this.task = task; }
   onOpen() {
     const { contentEl: el } = this, t = this.task;
-    el.addClass("dpc-modal");
+    el.addClass("dpc-modal"); el.addClass("dpc-log-modal");
     el.createEl("h3", { text: "Log time" });
     el.createDiv({ cls: "dpc-muted", text: `${t.title} · ${t.project} · ${t.logged}/${t.estimate == null ? "?" : t.estimate}h so far` });
-    const input = el.createEl("input", { type: "text", cls: "dpc-modal-input", attr: { placeholder: "1.5h, 2-3:30pm, or 2h at 10am — optional note after", "aria-label": "Time spent" } });
-    const idle = "Ends now unless you give a time: “2-3:30pm”, “14:00-15:30” or “1.5h at 10am”. Enter to save.";
-    const hint = el.createDiv({ cls: "dpc-muted dpc-modal-hint", text: idle });
+    const grid = el.createDiv({ cls: "dpc-log-grid" });
+    const field = (label, attrs, cls) => {
+      const w = grid.createDiv({ cls: "dpc-log-field" + (cls ? " " + cls : "") });
+      const id = "dpc-log-" + label.toLowerCase();
+      w.createEl("label", { text: label, attr: { for: id } });
+      return w.createEl("input", { cls: "dpc-log-input", attr: { id, ...attrs } });
+    };
+    const start = field("Start", { type: "time", step: "60", "aria-label": "Start time" });
+    const end = field("End", { type: "time", step: "60", "aria-label": "End time (blank = now)" });
+    const nowBtn = end.parentElement.createEl("button", { cls: "dpc-small dpc-log-now", text: "Now", attr: { type: "button", title: "Set the end time to now" } });
+    const hours = field("Hours", { type: "text", inputmode: "decimal", placeholder: "from times", "aria-label": "Hours (only needed with one time or none)" });
+    const note = field("Note", { type: "text", placeholder: "optional", "aria-label": "Note" }, "dpc-log-note");
     const nowMin = () => { const d = new Date(); return d.getHours() * 60 + d.getMinutes(); };
+    const hh = m => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    const dateLine = el.createDiv({ cls: "dpc-muted dpc-modal-hint" });
+    const hint = el.createDiv({ cls: "dpc-modal-hint" });
+    const idle = "Start and end, or one of them plus hours, or hours alone (ends now). Enter to save.";
+    const read = () => M.logFromFields({ start: start.value, end: end.value, hours: hours.value, note: note.value }, nowMin());
+    const dayName = off => { const d = M.addDays(M.localToday(), off || 0), dt = new Date(d + "T12:00:00");
+      return `${off ? "Yesterday" : "Today"}, ${dt.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" })}`; };
+    const show = () => {
+      const both = !!(start.value && end.value);
+      hours.disabled = both; hours.placeholder = both ? "from times" : "e.g. 1.5 or 1h30m";
+      const v = read(), any = start.value || end.value || hours.value;
+      if (!any) { hint.setText(idle); hint.removeClass("dpc-time-bad"); dateLine.setText(`Date: ${dayName(0)} (automatic)`); return; }
+      if (v.error) { hint.setText(v.error); hint.addClass("dpc-time-bad"); return; }
+      hint.removeClass("dpc-time-bad");
+      if (both) hours.value = String(v.hours);
+      dateLine.setText(`Date: ${dayName(v.dayOffset)} (automatic)`);
+      hint.setText(`${v.start}–${v.end} · ${v.hours}h${v.note ? ` — “${v.note}”` : ""}. Enter to save.`);
+    };
     const go = async () => {
-      const v = M.parseLogInput(input.value, nowMin());
-      if (!v) { hint.setText("Couldn't read that. Try “2h”, “45m”, “2-3:30pm” or “1h30m at 10am fixed the hinge”."); return; }
+      const v = read();
+      if (v.error) { hint.setText(v.error); hint.addClass("dpc-time-bad"); return; }
       this.close(); await this.plugin.logTime(t.path, v);
     };
-    input.addEventListener("input", () => { const v = M.parseLogInput(input.value, nowMin()); hint.setText(v ? `${M.describeLog(v)}. Enter to save.` : idle); });
+    // typing a time clears a stale computed hours value so the next pair is read fresh
+    for (const i of [start, end]) i.addEventListener("input", () => { if (!(start.value && end.value) && hours.disabled) hours.value = ""; show(); });
+    for (const i of [hours, note]) i.addEventListener("input", show);
+    nowBtn.addEventListener("click", () => { end.value = hh(nowMin()); end.dispatchEvent(new Event("input")); });
+    for (const i of [start, end, hours, note]) i.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+    const btns = el.createDiv({ cls: "dpc-log-btns" });
+    btns.createEl("button", { cls: "mod-cta", text: "Log time", attr: { type: "button" } }).addEventListener("click", go);
     const recent = (t.logs || []).slice(-3).reverse();
     if (recent.length) el.createDiv({ cls: "dpc-muted dpc-modal-hint", text: "Recent: " + recent.map(l => `${l.date ? l.date.slice(5) : "?"}${l.start ? ` ${l.start}–${l.end}` : ""} ${l.hours}h`).join(" · ") });
-    input.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); go(); } });
-    setTimeout(() => input.focus(), 0);
+    show();
+    setTimeout(() => start.focus(), 0);
   }
   onClose() { this.contentEl.empty(); }
 }

@@ -231,6 +231,15 @@
 /* modals */
 .dpc-modal-input { width: 100%; margin: 10px 0 6px; font-size: 1.05em; }
 .dpc-modal-hint { font-size: 0.88em; }
+.dpc-log-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; margin: 12px 0 8px; }
+.dpc-log-field { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.dpc-log-field label { font-size: 0.85em; color: var(--text-muted); }
+.dpc-log-field .dpc-log-input { width: 100%; font-variant-numeric: tabular-nums; }
+.dpc-log-field .dpc-log-now { align-self: flex-start; }
+.dpc-log-note { grid-column: 1 / -1; }
+.dpc-modal .dpc-time-bad { color: var(--text-error); }
+.dpc-log-btns { display: flex; justify-content: flex-end; margin: 10px 0 6px; }
+@media (max-width: 420px) { .dpc-log-grid { grid-template-columns: 1fr 1fr; } }
 .dpc-qa-preview { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 8px; }
 .dpc-qa-chip { font-size: 0.88em; padding: 2px 8px; border-radius: 10px; background: var(--background-secondary); }
 .dpc-qa-chip.is-default { color: var(--text-faint); }

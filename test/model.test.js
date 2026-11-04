@@ -526,3 +526,23 @@ test("board by day: this week's days, tasks on the day they're due, overdue befo
   assert.deepEqual(M.shiftToDay(mk2("x", null), "2026-10-23"), { due: "2026-10-23" });
   assert.equal(M.shiftToDay(mk2("x", "2026-10-23"), "2026-10-23"), null);
 });
+
+test("time log fields (start / end / hours, date automatic)", () => {
+  const now = 20 * 60 + 45; // 8:45 pm
+  const L = (f, n = now) => M.logFromFields(f, n);
+  assert.deepEqual(L({ start: "7:03pm", end: "8:30pm", note: " cad " }), { hours: 1.45, note: "cad", start: "19:03", end: "20:30", dayOffset: 0 }, "Luke's example");
+  assert.deepEqual(L({ start: "19:03", end: "20:30" }), { hours: 1.45, note: "", start: "19:03", end: "20:30", dayOffset: 0 }, "time-input values");
+  assert.deepEqual(L({ start: "19:00", hours: "1h30m" }), { hours: 1.5, note: "", start: "19:00", end: "20:30", dayOffset: 0 });
+  assert.deepEqual(L({ end: "20:30", hours: "90m" }), { hours: 1.5, note: "", start: "19:00", end: "20:30", dayOffset: 0 });
+  assert.deepEqual(L({ hours: "1.5" }), { hours: 1.5, note: "", start: "19:15", end: "20:45", dayOffset: 0 }, "hours only ends now");
+  assert.deepEqual(L({ start: "19:45" }), { hours: 1, note: "", start: "19:45", end: "20:45", dayOffset: 0 }, "start only ends now");
+  assert.equal(L({ start: "19:03", end: "20:30", hours: "5" }).hours, 1.45, "both times win over hours");
+  // past midnight
+  assert.deepEqual(L({ start: "23:00", end: "01:00" }, 90), { hours: 2, note: "", start: "23:00", end: "01:00", dayOffset: -1 }, "began last night");
+  assert.equal(L({ start: "23:00", end: "23:30" }, 30).dayOffset, -1, "start still ahead of now → last night");
+  assert.equal(L({ hours: "2" }, 30).dayOffset, -1);
+  assert.equal(L({ start: "22:00", hours: "3" }, 23 * 60 + 30).end, "01:00");
+  // errors
+  assert.ok(L({}).error); assert.ok(L({ end: "20:00" }).error);
+  assert.ok(L({ start: "25:00", end: "20:00" }).error); assert.ok(L({ hours: "lots" }).error); assert.ok(L({ hours: "30" }).error);
+});
