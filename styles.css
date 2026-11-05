@@ -63,7 +63,10 @@
 .dpc-urg-now { color: var(--dpc-risk); }
 .dpc-urg-now strong, .dpc-urg-tight strong { font-weight: 600; }
 .dpc-urg-tight { color: var(--dpc-over); }
-.dpc-card .dpc-urg { display: block; margin: 2px 0; }
+.dpc-card .dpc-urg { display: block; margin: 2px 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.3; }
+.dpc-card { min-width: 0; }
+.dpc-card-title { overflow-wrap: anywhere; }
+.dpc-card-foot .dpc-chip { min-width: 0; flex: 0 1 auto; }
 .dpc-badge-over { color: var(--dpc-over); background: color-mix(in srgb, var(--dpc-over) 12%, transparent); }
 .dpc-warn { color: var(--dpc-risk); }
 
@@ -351,7 +354,7 @@
 .dpc-chip.dpc-proj-btn { display: inline-flex; align-items: center; gap: 6px; padding: 1px 6px; margin: 0; border: 1px solid var(--background-modifier-border); color: var(--text-muted); }
 .dpc-weekend.is-active { background: var(--interactive-accent); color: var(--text-on-accent); }
 .dpc-board-days { gap: 8px; }
-.dpc-board-days .dpc-col { flex: 1 0 140px; min-width: 140px; padding: 8px 6px 10px; }
+.dpc-board-days .dpc-col { flex: 1 0 140px; min-width: 140px; padding: 8px 6px 10px; overflow: hidden; }
 .dpc-board-days .dpc-col-sub { flex-wrap: wrap; }
 .dpc-board-days .dpc-col.is-past { opacity: .75; }
 
