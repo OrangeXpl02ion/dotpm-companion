@@ -139,7 +139,7 @@ class CompanionView extends ItemView {
     // dotpm redraws itself; leave it alone while it's showing.
     if (this.tab === "dotpm" && this.dotpmView && this.dotpmView.containerEl.isConnected) return;
     V.render(root, {
-      tab: this.tab, mode: this.mode, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
+      tab: this.tab, mode: this.mode, boardWeek: this.boardWeek || 0, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
       bridged: !!p.dotpm(), showMore: !!this.showMore, openProjects: this.openProjects, projects: Object.values(p.projectNotes).filter(x => !x.archived),
       spill: M.spillover(p.taskList(), p.cfg, M.mondayOf(M.localToday())), projectColors: p.projectColors, dotpmError: this.dotpmError ? String(this.dotpmError.message || this.dotpmError) : null,
       cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity, capacityDays: p.capacityDays || {} }, tasks: p.taskList(), result: p.result,
@@ -169,6 +169,7 @@ class CompanionView extends ItemView {
       openProjectNote: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
       moveCard: (path, key) => p.moveCard(path, key),
       setBoardMode: m => { p.settings.boardMode = m; p.saveSettings(); this.refresh(); },
+      setBoardWeek: i => { this.boardWeek = Math.max(0, i | 0); this.refresh(); },
       reorderQueue: (id, targetId) => p.reorderQueue(id, targetId),
       moveProject: path => p.pickProjectFor(path),
       taskMenu: (path, evt) => p.taskMenu(path, evt),

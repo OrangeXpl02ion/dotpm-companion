@@ -415,7 +415,8 @@ function compute(tasks, cfg, settings, today) {
   const week = weekQueueDays(tasks, settings, placed, placedRaw, today);
   return { today, weekEnd, week, weeks, risk, queue, order: ordered.map(t => t.id), placed: placed.tasks, placedRaw: placedRaw.tasks,
     workShare: typeof settings.workSharePct === "number" ? settings.workSharePct : 100, worked: workedShare(tasks, settings, today, 14), urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
-    candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg), boardDays: boardDays(open, cfg, settings, today, urg) };
+    candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg), boardDays: boardDays(open, cfg, settings, today, urg),
+    boardWeeks: boardWeeks(open, tasks, cfg, settings, weeks, today, urg, placed, placedRaw) };
 }
 
 // ---------- urgency ----------
@@ -523,18 +524,36 @@ function board(open, cfg, settings, weeks, today, urg) {
 }
 // Board by day (0.20.0): this week, Monday to Sunday, one column per day holding the open tasks due that day,
 // plus Overdue for anything due before this week. Same urgency order as the week board.
-function boardDays(open, cfg, settings, today, urg) {
+// `monday` (0.24.0) picks a later week to look ahead; Overdue only shows on this week.
+function boardDays(open, cfg, settings, today, urg, monday) {
   const order = urgencyOrder(cfg, settings.multipliers || {}, urg || {});
-  const mon = mondayOf(today), sun = addDays(mon, 6);
-  const cols = [{ key: "overdue", label: "Overdue", tasks: [] }];
+  const thisMon = mondayOf(today), mon = monday ? mondayOf(monday) : thisMon, sun = addDays(mon, 6);
+  const withOverdue = mon <= thisMon;
+  const cols = withOverdue ? [{ key: "overdue", label: "Overdue", tasks: [] }] : [];
   for (let i = 0; i < 7; i++) { const d = addDays(mon, i); cols.push({ key: "day:" + d, date: d, isToday: d === today, isPast: d < today, tasks: [] }); }
   const byKey = Object.fromEntries(cols.map(c => [c.key, c]));
   for (const t of open) {
     if (!t.due || t.due > sun) continue;
-    (t.due < mon ? byKey.overdue : byKey["day:" + t.due]).tasks.push(t);
+    if (t.due < mon) { if (withOverdue) byKey.overdue.tasks.push(t); continue; }
+    byKey["day:" + t.due].tasks.push(t);
   }
   for (const c of cols) c.tasks.sort(order);
   return cols.filter(c => c.tasks.length || c.date);
+}
+// By-day board pages (0.24.0): this week and each later week of the planning range (at least 4, at most 12),
+// each with its day columns and the per-day logged / queued hours, so the board can step ahead week by week.
+function boardWeeks(open, tasks, cfg, settings, weeks, today, urg, placed, placedRaw) {
+  const thisMon = mondayOf(today);
+  const live = (weeks || []).filter(w => !w.isPast).length;
+  const n = Math.max(4, Math.min(12, live || 0));
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const mon = addDays(thisMon, 7 * i);
+    out.push({ monday: mon, sunday: addDays(mon, 6), offset: i,
+      cols: boardDays(open, cfg, settings, today, urg, mon),
+      days: weekQueueDays(tasks, settings, placed, placedRaw, today, mon) });
+  }
+  return out;
 }
 // New start/due when a task is moved to another day: shift both by whole days; no due date -> that day.
 function shiftToDay(t, day) {
@@ -658,9 +677,9 @@ function placeQueue(ordered, byName, cfg, settings, today, hoursOf, loggedToday)
 // shows what you logged plus what the queue still places today, later days show what the queue places.
 // budget = open hours × work share (the day's full budget, before anything is logged). placed / placedRaw are
 // placeQueue results (× multipliers / raw).
-function weekQueueDays(tasks, settings, placed, placedRaw, today) {
+function weekQueueDays(tasks, settings, placed, placedRaw, today, monday) {
   const share = Math.max(0, (typeof settings.workSharePct === "number" ? settings.workSharePct : 100) / 100);
-  const mon = mondayOf(today), out = [];
+  const mon = monday ? mondayOf(monday) : mondayOf(today), out = [];
   const empty = () => ({ total: 0, byType: {}, byProject: {}, byTask: [] });
   const add = (m, task, hours) => {
     const k = typeKey(task), pk = task.project || NO_PROJECT;
@@ -1423,7 +1442,7 @@ module.exports = {
   linkText, parseChecklist, checklistProgress, parseTask,
   typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, suggestOrder, isStarted, startsLater, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute, availableOnDay, dayLeftShare, hoursUntil,
-  linkTarget, baseName, isReady, measuredSeries, board, boardDays, shiftToDay, shiftToWeek, queueOrder, moveInOrder, dayBudget, placeQueue, workedShare,
+  linkTarget, baseName, isReady, measuredSeries, board, boardDays, boardWeeks, shiftToDay, shiftToWeek, queueOrder, moveInOrder, dayBudget, placeQueue, workedShare,
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput, logFromFields,
   dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,

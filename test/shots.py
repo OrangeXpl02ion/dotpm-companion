@@ -24,6 +24,7 @@ cases=[
  ("queue_light",dict(tab="queue",showMore=True)),
  ("board_week",dict(tab="board",settings=dict(boardMode="week"))),
  ("board_day",dict(tab="board",today="2026-10-28",settings=dict(boardMode="day"))),
+ ("board_day_next",dict(tab="board",today="2026-10-28",boardWeek=1,settings=dict(boardMode="day"))),
  ("proj_light",dict(tab="types",today="2026-10-28",mutate=TIME_MUT)),
  ("proj_project",dict(tab="types",today="2026-10-28",mutate=TIME_MUT,proj=dict(group="project",view="both"))),
  ("proj_future",dict(tab="types",today="2026-10-28",proj=dict(week="2026-11-09",view="plan"))),

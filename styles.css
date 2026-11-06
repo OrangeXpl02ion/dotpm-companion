@@ -364,3 +364,6 @@
 .pm-time-log-row .dpc-tl-dash { color: var(--text-muted); }
 .pm-time-log-row .dpc-tl-now { font-size: 0.8em; color: var(--text-muted); padding: 2px 6px; height: auto; }
 @media (max-width: 600px) { .pm-time-log-row { flex-wrap: wrap; } }
+.dpc-weeknav { gap: 8px; margin-bottom: 6px; }
+.dpc-weeknav > .dpc-small:disabled { opacity: .4; cursor: default; }
+.dpc-weeknav .dpc-seg { flex-wrap: wrap; }

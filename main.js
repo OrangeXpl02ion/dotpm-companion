@@ -419,7 +419,8 @@ function compute(tasks, cfg, settings, today) {
   const week = weekQueueDays(tasks, settings, placed, placedRaw, today);
   return { today, weekEnd, week, weeks, risk, queue, order: ordered.map(t => t.id), placed: placed.tasks, placedRaw: placedRaw.tasks,
     workShare: typeof settings.workSharePct === "number" ? settings.workSharePct : 100, worked: workedShare(tasks, settings, today, 14), urgency: urg, over, upcoming, unscheduled, beyond, measured: measured(tasks, cfg), measuredSeries: measuredSeries(tasks, cfg),
-    candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg), boardDays: boardDays(open, cfg, settings, today, urg) };
+    candidates, doneToday, blocked, waiting, days, board: board(open, cfg, settings, weeks, today, urg), boardDays: boardDays(open, cfg, settings, today, urg),
+    boardWeeks: boardWeeks(open, tasks, cfg, settings, weeks, today, urg, placed, placedRaw) };
 }
 
 // ---------- urgency ----------
@@ -527,18 +528,36 @@ function board(open, cfg, settings, weeks, today, urg) {
 }
 // Board by day (0.20.0): this week, Monday to Sunday, one column per day holding the open tasks due that day,
 // plus Overdue for anything due before this week. Same urgency order as the week board.
-function boardDays(open, cfg, settings, today, urg) {
+// `monday` (0.24.0) picks a later week to look ahead; Overdue only shows on this week.
+function boardDays(open, cfg, settings, today, urg, monday) {
   const order = urgencyOrder(cfg, settings.multipliers || {}, urg || {});
-  const mon = mondayOf(today), sun = addDays(mon, 6);
-  const cols = [{ key: "overdue", label: "Overdue", tasks: [] }];
+  const thisMon = mondayOf(today), mon = monday ? mondayOf(monday) : thisMon, sun = addDays(mon, 6);
+  const withOverdue = mon <= thisMon;
+  const cols = withOverdue ? [{ key: "overdue", label: "Overdue", tasks: [] }] : [];
   for (let i = 0; i < 7; i++) { const d = addDays(mon, i); cols.push({ key: "day:" + d, date: d, isToday: d === today, isPast: d < today, tasks: [] }); }
   const byKey = Object.fromEntries(cols.map(c => [c.key, c]));
   for (const t of open) {
     if (!t.due || t.due > sun) continue;
-    (t.due < mon ? byKey.overdue : byKey["day:" + t.due]).tasks.push(t);
+    if (t.due < mon) { if (withOverdue) byKey.overdue.tasks.push(t); continue; }
+    byKey["day:" + t.due].tasks.push(t);
   }
   for (const c of cols) c.tasks.sort(order);
   return cols.filter(c => c.tasks.length || c.date);
+}
+// By-day board pages (0.24.0): this week and each later week of the planning range (at least 4, at most 12),
+// each with its day columns and the per-day logged / queued hours, so the board can step ahead week by week.
+function boardWeeks(open, tasks, cfg, settings, weeks, today, urg, placed, placedRaw) {
+  const thisMon = mondayOf(today);
+  const live = (weeks || []).filter(w => !w.isPast).length;
+  const n = Math.max(4, Math.min(12, live || 0));
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const mon = addDays(thisMon, 7 * i);
+    out.push({ monday: mon, sunday: addDays(mon, 6), offset: i,
+      cols: boardDays(open, cfg, settings, today, urg, mon),
+      days: weekQueueDays(tasks, settings, placed, placedRaw, today, mon) });
+  }
+  return out;
 }
 // New start/due when a task is moved to another day: shift both by whole days; no due date -> that day.
 function shiftToDay(t, day) {
@@ -662,9 +681,9 @@ function placeQueue(ordered, byName, cfg, settings, today, hoursOf, loggedToday)
 // shows what you logged plus what the queue still places today, later days show what the queue places.
 // budget = open hours × work share (the day's full budget, before anything is logged). placed / placedRaw are
 // placeQueue results (× multipliers / raw).
-function weekQueueDays(tasks, settings, placed, placedRaw, today) {
+function weekQueueDays(tasks, settings, placed, placedRaw, today, monday) {
   const share = Math.max(0, (typeof settings.workSharePct === "number" ? settings.workSharePct : 100) / 100);
-  const mon = mondayOf(today), out = [];
+  const mon = monday ? mondayOf(monday) : mondayOf(today), out = [];
   const empty = () => ({ total: 0, byType: {}, byProject: {}, byTask: [] });
   const add = (m, task, hours) => {
     const k = typeKey(task), pk = task.project || NO_PROJECT;
@@ -1427,7 +1446,7 @@ module.exports = {
   linkText, parseChecklist, checklistProgress, parseTask,
   typeKey, multiplierFor, remaining, adjusted, overBudget, urgency, urgencyOrder, suggestOrder, isStarted, startsLater, TIERS, recordMultiplier, ensureMultipliers, multiplierOn, measured,
   parseCapacity, capacityTemplate, weeksInRange, spread, compute, availableOnDay, dayLeftShare, hoursUntil,
-  linkTarget, baseName, isReady, measuredSeries, board, boardDays, shiftToDay, shiftToWeek, queueOrder, moveInOrder, dayBudget, placeQueue, workedShare,
+  linkTarget, baseName, isReady, measuredSeries, board, boardDays, boardWeeks, shiftToDay, shiftToWeek, queueOrder, moveInOrder, dayBudget, placeQueue, workedShare,
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput, logFromFields,
   dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,
@@ -1910,7 +1929,7 @@ function renderBoard(body, st, on) {
   body.append(h(doc, "div", { class: "dpc-toolbar" },
     h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board view" }, [["today", "Today"], ["week", "By week"], ["day", "By day"]].map(([id, name]) =>
       h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
-    h(doc, "span", { class: "dpc-muted" }, mode === "day" ? "This week: each card sits on the day it's due, most urgent first. Drag to another day to move its dates (start moves with it)."
+    h(doc, "span", { class: "dpc-muted" }, mode === "day" ? "Each card sits on the day it's due, most urgent first. Use ‹ › to look ahead a week at a time. Drag to another day to move its dates (start moves with it)."
       : mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates."
       : (st.settings.queueOrder || []).length ? "Started tasks (In Progress, or start date reached) in your order; new tasks slot in by urgency." : "Started tasks (In Progress, or start date reached), most urgent first: Now, Tight, then least slack."),
     h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.quickAdd(), title: "Quick add a task (command: Quick add task)" }, "+ Quick add")));
@@ -1943,8 +1962,24 @@ function renderBoard(body, st, on) {
 // week). Each day shows the hours the queue places on it against that day's budget, as on the Today chart.
 function renderBoardDays(body, st, on) {
   const doc = body.ownerDocument, R = st.result, raw = st.mode === "raw";
-  const cols = R.boardDays || [];
-  const wk = Object.fromEntries((R.week || []).map(d => [d.date, d]));
+  const pages = R.boardWeeks || [];
+  const idx = Math.max(0, Math.min(pages.length - 1, st.boardWeek || 0));
+  const page = pages[idx];
+  const cols = page ? page.cols : (R.boardDays || []);
+  const wk = Object.fromEntries(((page && page.days) || R.week || []).map(d => [d.date, d]));
+  if (pages.length > 1 && on.setBoardWeek) {
+    const label = idx === 0 ? "This week" : idx === 1 ? "Next week" : `In ${idx} weeks`;
+    const due = cols.reduce((a, c) => a + c.tasks.length, 0);
+    body.append(h(doc, "div", { class: "dpc-toolbar dpc-weeknav", role: "group", "aria-label": "Week shown" },
+      h(doc, "button", { class: "dpc-small", disabled: idx === 0, "aria-label": "Previous week", title: "Previous week", onclick: () => on.setBoardWeek(idx - 1) }, "‹"),
+      h(doc, "strong", { class: "dpc-nowrap" }, label),
+      h(doc, "span", { class: "dpc-muted dpc-nowrap" }, `${fmtD(page.monday)} – ${fmtD(page.sunday)} · ${due} due`),
+      h(doc, "button", { class: "dpc-small", disabled: idx >= pages.length - 1, "aria-label": "Next week", title: "Next week", onclick: () => on.setBoardWeek(idx + 1) }, "›"),
+      idx > 0 ? h(doc, "button", { class: "dpc-small", onclick: () => on.setBoardWeek(0) }, "Back to this week") : null,
+      h(doc, "div", { class: "dpc-seg dpc-seg-sm dpc-right", role: "group", "aria-label": "Jump to week" }, pages.map((pg, i) =>
+        h(doc, "button", { class: "dpc-seg-btn" + (i === idx ? " is-active" : ""), "aria-pressed": i === idx, title: `${fmtD(pg.monday)} – ${fmtD(pg.sunday)}`, onclick: () => on.setBoardWeek(i) },
+          i === 0 ? "Now" : fmtD(pg.monday))))));
+  }
   const targets = cols.filter(c => c.date).map(c => ({ key: c.key, label: c.isToday ? "Today" : `${dowOf(c.date)} ${fmtD(c.date)}` }));
   const wrap = h(doc, "div", { class: "dpc-board dpc-board-days" });
   for (const c of cols) {
@@ -2783,7 +2818,7 @@ class CompanionView extends ItemView {
     // dotpm redraws itself; leave it alone while it's showing.
     if (this.tab === "dotpm" && this.dotpmView && this.dotpmView.containerEl.isConnected) return;
     V.render(root, {
-      tab: this.tab, mode: this.mode, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
+      tab: this.tab, mode: this.mode, boardWeek: this.boardWeek || 0, expanded: this.expanded, collapsed: this.collapsed, query: this.query,
       bridged: !!p.dotpm(), showMore: !!this.showMore, openProjects: this.openProjects, projects: Object.values(p.projectNotes).filter(x => !x.archived),
       spill: M.spillover(p.taskList(), p.cfg, M.mondayOf(M.localToday())), projectColors: p.projectColors, dotpmError: this.dotpmError ? String(this.dotpmError.message || this.dotpmError) : null,
       cfg: p.cfg, settings: { ...p.settings, capacity: p.capacity, capacityDays: p.capacityDays || {} }, tasks: p.taskList(), result: p.result,
@@ -2813,6 +2848,7 @@ class CompanionView extends ItemView {
       openProjectNote: path => { const f = p.app.vault.getAbstractFileByPath(path); if (f instanceof TFile) p.app.workspace.getLeaf(false).openFile(f); },
       moveCard: (path, key) => p.moveCard(path, key),
       setBoardMode: m => { p.settings.boardMode = m; p.saveSettings(); this.refresh(); },
+      setBoardWeek: i => { this.boardWeek = Math.max(0, i | 0); this.refresh(); },
       reorderQueue: (id, targetId) => p.reorderQueue(id, targetId),
       moveProject: path => p.pickProjectFor(path),
       taskMenu: (path, evt) => p.taskMenu(path, evt),

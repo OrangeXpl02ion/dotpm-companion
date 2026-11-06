@@ -536,6 +536,24 @@ test("board by day: this week's days, tasks on the day they're due, overdue befo
   assert.equal(M.shiftToDay(mk2("x", "2026-10-23"), "2026-10-23"), null);
 });
 
+test("board by day looks ahead: later weeks have their own days and no overdue column (0.24.0)", () => {
+  const cfg2 = M.readDotpmConfig(require("./fixture/vault.json").dotpm);
+  const mk2 = (id, due) => ({ id, path: id + ".md", title: id, status: "todo", priority: "medium", due, start: null, logs: [], logged: 0, deps: [], type: "task", workType: "CAD", estimate: 1 });
+  const today = "2026-11-05"; // Thursday
+  const open = [mk2("old", "2026-10-28"), mk2("fri", "2026-11-06"), mk2("mon", "2026-11-09"), mk2("later", "2026-11-18")];
+  const next = M.boardDays(open, cfg2, { multipliers: {} }, today, {}, "2026-11-09");
+  assert.equal(next[0].key, "day:2026-11-09", "no Overdue column ahead");
+  assert.equal(next.length, 7);
+  assert.deepEqual(next[0].tasks.map(t => t.id), ["mon"]);
+  assert.ok(next.every(c => !c.isPast && !c.isToday));
+  const W = M.boardWeeks(open, open, cfg2, { multipliers: {} }, [], today, {}, { days: {} }, { days: {} });
+  assert.equal(W.length, 4);
+  assert.deepEqual(W.map(w => w.monday), ["2026-11-02", "2026-11-09", "2026-11-16", "2026-11-23"]);
+  assert.equal(W[0].cols[0].key, "overdue");
+  assert.deepEqual(W[2].cols.find(c => c.key === "day:2026-11-18").tasks.map(t => t.id), ["later"]);
+  assert.equal(W[1].days[0].date, "2026-11-09");
+});
+
 test("time log fields (start / end / hours, date automatic)", () => {
   const now = 20 * 60 + 45; // 8:45 pm
   const L = (f, n = now) => M.logFromFields(f, n);

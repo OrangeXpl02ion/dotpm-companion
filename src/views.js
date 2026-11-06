@@ -471,7 +471,7 @@ function renderBoard(body, st, on) {
   body.append(h(doc, "div", { class: "dpc-toolbar" },
     h(doc, "div", { class: "dpc-seg", role: "group", "aria-label": "Board view" }, [["today", "Today"], ["week", "By week"], ["day", "By day"]].map(([id, name]) =>
       h(doc, "button", { class: "dpc-seg-btn" + (mode === id ? " is-active" : ""), "aria-pressed": mode === id, onclick: () => on.setBoardMode(id) }, name))),
-    h(doc, "span", { class: "dpc-muted" }, mode === "day" ? "This week: each card sits on the day it's due, most urgent first. Drag to another day to move its dates (start moves with it)."
+    h(doc, "span", { class: "dpc-muted" }, mode === "day" ? "Each card sits on the day it's due, most urgent first. Use ‹ › to look ahead a week at a time. Drag to another day to move its dates (start moves with it)."
       : mode === "week" ? "Each card sits in the week it's due, in queue order. Drag to another week to move its dates."
       : (st.settings.queueOrder || []).length ? "Started tasks (In Progress, or start date reached) in your order; new tasks slot in by urgency." : "Started tasks (In Progress, or start date reached), most urgent first: Now, Tight, then least slack."),
     h(doc, "button", { class: "dpc-small dpc-right", onclick: () => on.quickAdd(), title: "Quick add a task (command: Quick add task)" }, "+ Quick add")));
@@ -504,8 +504,24 @@ function renderBoard(body, st, on) {
 // week). Each day shows the hours the queue places on it against that day's budget, as on the Today chart.
 function renderBoardDays(body, st, on) {
   const doc = body.ownerDocument, R = st.result, raw = st.mode === "raw";
-  const cols = R.boardDays || [];
-  const wk = Object.fromEntries((R.week || []).map(d => [d.date, d]));
+  const pages = R.boardWeeks || [];
+  const idx = Math.max(0, Math.min(pages.length - 1, st.boardWeek || 0));
+  const page = pages[idx];
+  const cols = page ? page.cols : (R.boardDays || []);
+  const wk = Object.fromEntries(((page && page.days) || R.week || []).map(d => [d.date, d]));
+  if (pages.length > 1 && on.setBoardWeek) {
+    const label = idx === 0 ? "This week" : idx === 1 ? "Next week" : `In ${idx} weeks`;
+    const due = cols.reduce((a, c) => a + c.tasks.length, 0);
+    body.append(h(doc, "div", { class: "dpc-toolbar dpc-weeknav", role: "group", "aria-label": "Week shown" },
+      h(doc, "button", { class: "dpc-small", disabled: idx === 0, "aria-label": "Previous week", title: "Previous week", onclick: () => on.setBoardWeek(idx - 1) }, "‹"),
+      h(doc, "strong", { class: "dpc-nowrap" }, label),
+      h(doc, "span", { class: "dpc-muted dpc-nowrap" }, `${fmtD(page.monday)} – ${fmtD(page.sunday)} · ${due} due`),
+      h(doc, "button", { class: "dpc-small", disabled: idx >= pages.length - 1, "aria-label": "Next week", title: "Next week", onclick: () => on.setBoardWeek(idx + 1) }, "›"),
+      idx > 0 ? h(doc, "button", { class: "dpc-small", onclick: () => on.setBoardWeek(0) }, "Back to this week") : null,
+      h(doc, "div", { class: "dpc-seg dpc-seg-sm dpc-right", role: "group", "aria-label": "Jump to week" }, pages.map((pg, i) =>
+        h(doc, "button", { class: "dpc-seg-btn" + (i === idx ? " is-active" : ""), "aria-pressed": i === idx, title: `${fmtD(pg.monday)} – ${fmtD(pg.sunday)}`, onclick: () => on.setBoardWeek(i) },
+          i === 0 ? "Now" : fmtD(pg.monday))))));
+  }
   const targets = cols.filter(c => c.date).map(c => ({ key: c.key, label: c.isToday ? "Today" : `${dowOf(c.date)} ${fmtD(c.date)}` }));
   const wrap = h(doc, "div", { class: "dpc-board dpc-board-days" });
   for (const c of cols) {
