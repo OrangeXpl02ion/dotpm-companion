@@ -392,7 +392,7 @@ function compute(tasks, cfg, settings, today) {
     if (late.length) waiting[t.path] = late;
   }
   // Queue placement: days filled in queue order (see placeQueue), once with × multipliers and once raw.
-  const loggedToday = tasks.reduce((a, t) => a + (t.logs || []).filter(l => l.date === today).reduce((x, l) => x + l.hours, 0), 0);
+  const loggedToday = tasks.reduce((a, t) => a + dayLogs(t).filter(l => l.date === today).reduce((x, l) => x + l.hours, 0), 0);
   const placed = placeQueue(ordered, byName, cfg, settings, today, t => adjusted(t, mults), loggedToday);
   const placedRaw = placeQueue(ordered, byName, cfg, settings, today, remaining, loggedToday);
   // next 7 days: placed hours per day (× multipliers and raw) against that day's budget
@@ -691,7 +691,7 @@ function weekQueueDays(tasks, settings, placed, placedRaw, today, monday) {
     const x = { date: d, past: d < today, isToday: d === today, logged: empty(), placed: empty(), placedRaw: empty(),
       open: availableOnDay(settings.capacity || {}, d, settings.defaultWeeklyHours, settings.capacityDays) };
     x.budget = x.open * share;
-    if (d <= today) for (const t of tasks) for (const l of t.logs || []) if (l.date === d && l.hours > 0) add(x.logged, t, l.hours);
+    if (d <= today) for (const t of tasks) for (const l of dayLogs(t)) if (l.date === d && l.hours > 0) add(x.logged, t, l.hours);
     if (d >= today) {
       for (const [src, m] of [[placed, x.placed], [placedRaw, x.placedRaw]]) {
         const day = src && src.days && src.days[d];
@@ -712,7 +712,7 @@ function workedShare(tasks, settings, today, n) {
     if (!(d in cd) && !(isoWeek(d) in cap)) continue; // before the planning range: no open hours to compare with
     open += availableOnDay(cap, d, settings.defaultWeeklyHours, cd); counted.add(d);
   }
-  for (const t of tasks) for (const l of t.logs || []) if (counted.has(l.date)) logged += l.hours;
+  for (const t of tasks) for (const l of dayLogs(t)) if (counted.has(l.date)) logged += l.hours;
   return open > 0 ? { share: logged / open, logged, open, from: [...counted].sort()[0] } : null;
 }
 
@@ -1242,14 +1242,36 @@ function setFrontmatterLines(text, fields) {
 }
 
 // ---------- time spent ----------
+// A log whose clock range crosses midnight is stored once, dated the day it ended (20:00–01:00 logged after
+// midnight is dated the next day). For counting time per day it's split at midnight: the part before midnight
+// goes to the day before (20:00–00:00), the rest stays on its date (00:00–01:00). Hours are shared in proportion
+// to the clock time on each side, so the total doesn't change. A log ending exactly at 00:00 moves wholly to the
+// day before. Logs without clock times, or that don't cross midnight, come back unchanged.
+function splitAtMidnight(l) {
+  if (!l || !l.date || !(l.hours > 0)) return [l];
+  const s = l.start ? hm(l.start) : null, e = l.end ? hm(l.end) : null;
+  let a, b; // the range in hours relative to the log's date (a < 0 = started the day before)
+  if (s != null && e != null) { b = e; a = e <= s ? s - 24 : s; }
+  else if (s != null) { b = s + l.hours; a = s; if (b > 24) { a -= 24; b -= 24; } }
+  else if (e != null) { b = e; a = e - l.hours; }
+  else return [l];
+  if (!(a < 0)) return [l];
+  const len = b - a, h1 = len > 0 ? l.hours * (-a / len) : l.hours, h2 = l.hours - h1;
+  const before = { ...l, date: addDays(l.date, -1), hours: h1, start: fmtClock((a + 24) * 60), end: "00:00", split: true };
+  const after = { ...l, hours: h2, start: "00:00", end: fmtClock(b * 60), split: true };
+  return h2 > 1e-9 ? [before, after] : [{ ...before, hours: l.hours }];
+}
+// A task's logs as they count per day (see splitAtMidnight).
+function dayLogs(t) { return ((t && t.logs) || []).flatMap(splitAtMidnight); }
+
 // Where logged time went between `from` and `to` (inclusive), read from every task's time logs.
-// Each log counts on its own date. Logs with a clock range are also placed hour by hour (`hours`, for a
-// single day); logs without one only count in the totals ("untimed"). A range that runs past midnight
-// is cut at midnight. `budget` is estimate × multiplier, the same figure the planner uses.
+// Each log counts on its own date, except that a range crossing midnight is split between the two days
+// (splitAtMidnight). Logs with a clock range are also placed hour by hour (`hours`, for a single day); logs
+// without one only count in the totals ("untimed"). `budget` is estimate × multiplier, the same figure the planner uses.
 // opts: { capacity, capacityDays, defaultWeeklyHours, workWindow, today }
-// The log's clock span on its date, as [from, to, fullLength] in hours. A log that crosses midnight is dated the day
-// it ended, so on that day it covers 00:00 → end (the part before midnight isn't on that day's chart); fullLength is
-// the whole range so its hours are spread at the right rate.
+// The log's clock span on its date, as [from, to, fullLength] in hours. Given an unsplit log that crosses midnight
+// (dated the day it ended) it returns the part after midnight, 00:00 → end, with fullLength the whole range;
+// timeReport splits such logs first, so there each piece covers only its own day.
 function logSpan(l) {
   const e = l.end ? hm(l.end) : null, s0 = l.start ? hm(l.start) : null;
   if (s0 == null && e == null) return null;
@@ -1271,7 +1293,7 @@ function timeReport(tasks, cfg, mults, from, to, opts) {
     const k = typeKey(t), pk = t.project || NO_PROJECT;
     let here = 0, before = 0;
     const sessions = [];
-    for (const l of t.logs || []) {
+    for (const l of dayLogs(t)) {
       if (!l.date || !(l.hours > 0)) continue;
       if (l.date < from) { before += l.hours; continue; }
       if (l.date > to) continue;
@@ -1340,7 +1362,7 @@ function snapshotWeek(result, tasks, today) {
   const w = (result.weeks || []).find(x => x.isCurrent); if (!w) return null;
   const p = emptyPlan();
   for (const e of w.tasks) addToPlan(p, e.task, e.adj, e.raw);
-  for (const t of tasks) for (const l of t.logs || []) if (l.date >= w.start && l.date < today && l.hours > 0) addToPlan(p, t, l.hours, l.hours);
+  for (const t of tasks) for (const l of dayLogs(t)) if (l.date >= w.start && l.date < today && l.hours > 0) addToPlan(p, t, l.hours, l.hours);
   return { week: w.week, taken: today, available: w.weekAvailable != null ? w.weekAvailable : w.available, ...p };
 }
 function rebuildPlan(tasks, cfg, settings, from, to) {
@@ -1389,7 +1411,7 @@ function recordWeekPlan(settings, result, tasks, today, keep) {
 // Average hours a day over the days before `date` in its week that have time logged (for "vs your average").
 function weekAverageBefore(tasks, date) {
   const mon = mondayOf(date), per = {};
-  for (const t of tasks) for (const l of t.logs || []) if (l.date >= mon && l.date < date && l.hours > 0) per[l.date] = (per[l.date] || 0) + l.hours;
+  for (const t of tasks) for (const l of dayLogs(t)) if (l.date >= mon && l.date < date && l.hours > 0) per[l.date] = (per[l.date] || 0) + l.hours;
   const v = Object.values(per);
   return v.length ? { average: v.reduce((a, b) => a + b, 0) / v.length, days: v.length } : null;
 }
@@ -1434,7 +1456,7 @@ function stampTimes(hours, nowMin) {
 
 module.exports = {
   dayRule, isWeekendDay, hasTag, toggleTag, weekQueueDays,
-  logsToStamp, logsToRestamp, targetProgress, stampTimes, timeReport, weekAverageBefore, logSpan,
+  logsToStamp, logsToRestamp, targetProgress, stampTimes, timeReport, weekAverageBefore, logSpan, splitAtMidnight, dayLogs,
   bodyOf, setFrontmatterLines, frontmatterOf,
   NO_TYPE, NO_PROJECT, DEFAULT_MULTIPLIER, categoryGroups, DUE_SORT, isDefaultSort,
   isDate, normDate, toDay, fromDay, addDays, diffDays, mondayOf, isoWeek, localToday,
@@ -1446,7 +1468,7 @@ module.exports = {
   parentPath, projectTree, projectStats, plannedShare, parseQuickAdd, parseLogInput, logFromFields,
   dateChanges, describeChange, scheduleRows, SCHEDULE_HEADER, prependRows, spillover, SPILLOVER_HEADER, spilloverRows,
   parseTemplate, templateTasks, slug, taskFile, appendTimeLog, EXAMPLE_TEMPLATE,
-  parseCapacityDays, parseCapacityInput, describeLog, normClock, fmtClock, dayUsable, dayLabel, adjustmentNote, planAdjustment, addToRules, removeLastFromRules,
+  parseCapacityDays, parseCapacityInput, describeLog, normClock, fmtClock, fmtH, dayUsable, dayLabel, adjustmentNote, planAdjustment, addToRules, removeLastFromRules,
   applyCapacityDelta, capacityLogRow,
   snapshotWeek, rebuildPlan, weekProjection, recordWeekPlan, isCancelled,
 };

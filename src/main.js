@@ -1054,7 +1054,8 @@ class FileSuggestModal extends FuzzySuggestModal {
   onChooseItem(f) { this.onPick(f); }
 }
 // Log time: separate Start / End / Hours / Note fields. The date isn't a field — it's today; work that crosses
-// midnight is dated the following day, the day it ended (shown, not editable). Any two of start, end and hours are enough; one alone ends now.
+// midnight is dated the following day, the day it ended (shown, not editable), and counts on both days: the hours
+// before midnight on the day before, the rest on its date (the hint shows the split). Any two of start, end and hours are enough; one alone ends now.
 class LogTimeModal extends Modal {
   constructor(plugin, task) { super(plugin.app); this.plugin = plugin; this.task = task; }
   onOpen() {
@@ -1091,7 +1092,9 @@ class LogTimeModal extends Modal {
       hint.removeClass("dpc-time-bad");
       if (both) hours.value = String(v.hours);
       dateLine.setText(`Date: ${dayName(v.dayOffset)} (automatic)`);
-      hint.setText(`${v.start}–${v.end} · ${v.hours}h${v.note ? ` — “${v.note}”` : ""}. Enter to save.`);
+      const parts = M.splitAtMidnight({ date: M.addDays(M.localToday(), v.dayOffset || 0), start: v.start, end: v.end, hours: v.hours });
+      const split = parts.length === 2 ? ` · counts ${parts.map(p => `${M.fmtH(p.hours)}h on ${M.dayLabel(p.date)}`).join(" + ")}` : "";
+      hint.setText(`${v.start}–${v.end} · ${v.hours}h${split}${v.note ? ` — “${v.note}”` : ""}. Enter to save.`);
     };
     const go = async () => {
       const v = read();

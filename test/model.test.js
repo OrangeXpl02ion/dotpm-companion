@@ -398,27 +398,30 @@ test("time report: per day, per hour, per type and project, budget comparison", 
   assert.equal(pr.budget, 1); assert.equal(pr.over, true); assert.equal(pr.done, true);
   assert.equal(day.rows[0].task.title, "CAD part"); // sorted by time here
   assert.equal(day.rows.find(r => r.task.title === "Notes").budget, null);
-  // a log crossing midnight is dated the day it ended: that day's chart has the part after midnight
+  // a log crossing midnight is dated the day it ended and split: 23:30–00:00 on the day before, 00:00–00:30 on its date
   const tue = M.timeReport(ts, cfg, mults, "2026-10-20", "2026-10-20", {});
-  assert.equal(tue.total, 1, "all its hours count on its date");
+  assert.equal(tue.total, 0.5, "only the part after midnight counts on its date");
   assert.equal(tue.hours[0].hour, 0, "axis widens to midnight");
-  assert.ok(Math.abs(tue.hours[0].total - 0.5) < 1e-9, "00:00–00:30 at the log's real rate");
+  assert.ok(Math.abs(tue.hours[0].total - 0.5) < 1e-9, "00:00–00:30");
+  const mon = M.timeReport(ts, cfg, mults, "2026-10-19", "2026-10-19", {});
+  assert.equal(mon.total, 0.5, "the part before midnight counts the day before");
+  assert.ok(Math.abs(mon.hours.find(b => b.hour === 23).total - 0.5) < 1e-9, "23:30–00:00");
   assert.deepEqual(M.logSpan({ start: "23:30", end: "00:30", hours: 1 }), [0, 0.5, 1]);
   assert.deepEqual(M.logSpan({ start: "22:00", hours: 3 }), [0, 1, 3]);
   assert.deepEqual(M.logSpan({ start: "09:00", end: "10:30", hours: 1.5 }), [9, 10.5, 1.5]);
-  // week: the average is over days with time logged (Mon has none), up to today
+  // week: the average is over days with time logged, up to today (Mon has only the late log's 23:30–00:00)
   const wk = M.timeReport(ts, cfg, mults, "2026-10-19", "2026-10-25", { today: "2026-10-21" });
   assert.equal(wk.days.length, 7); assert.equal(wk.hours, null);
-  assert.equal(wk.total, 4.75); assert.equal(wk.elapsed, 3); assert.equal(wk.loggedDays, 2);
-  assert.ok(Math.abs(wk.average - 4.75 / 2) < 1e-9);
+  assert.equal(wk.total, 4.75); assert.equal(wk.elapsed, 3); assert.equal(wk.loggedDays, 3);
+  assert.ok(Math.abs(wk.average - 4.75 / 3) < 1e-9);
   // one logged day → the average is that day
-  const one = M.timeReport(ts, cfg, mults, "2026-10-19", "2026-10-25", { today: "2026-10-20" });
-  assert.equal(one.loggedDays, 1); assert.equal(one.average, one.days[1].total);
-  const none = M.timeReport(ts, cfg, mults, "2026-10-19", "2026-10-25", { today: "2026-10-19" });
+  const one = M.timeReport(ts, cfg, mults, "2026-10-19", "2026-10-25", { today: "2026-10-19" });
+  assert.equal(one.loggedDays, 1); assert.equal(one.average, one.days[0].total);
+  const none = M.timeReport(ts.filter(t => t.title !== "Late"), cfg, mults, "2026-10-19", "2026-10-25", { today: "2026-10-19" });
   assert.equal(none.loggedDays, 0); assert.equal(none.average, 0);
-  assert.equal(wk.days[2].total, 3.75); assert.equal(wk.days[1].byType[M.NO_TYPE], 1);
+  assert.equal(wk.days[2].total, 3.75); assert.equal(wk.days[1].byType[M.NO_TYPE], 0.5); assert.equal(wk.days[0].byType[M.NO_TYPE], 0.5);
   // average of earlier logged days in the week
-  assert.deepEqual(M.weekAverageBefore(ts, "2026-10-21"), { average: 1, days: 1 });
+  assert.deepEqual(M.weekAverageBefore(ts, "2026-10-21"), { average: 0.5, days: 2 });
   assert.equal(M.weekAverageBefore(ts, "2026-10-19"), null);
 });
 
@@ -597,4 +600,30 @@ test("dotpm task page: crossing midnight moves the date to the following day", (
   DT.shiftForMidnight(b, false, false, T); assert.equal(b.date, T, "never past today");
   const c = { date: "2026-11-01", start: "23:00", end: "01:00" };
   assert.equal(DT.shiftForMidnight(c, true, false, T), false); assert.equal(c.date, "2026-11-01", "already crossing when opened: left alone");
+});
+
+test("time logs crossing midnight are split between the two days", () => {
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  // 8 pm – 1 am logged after midnight (dated Nov 16): 4 h on Nov 15, 1 h on Nov 16
+  const [a, b] = M.splitAtMidnight({ date: "2026-11-16", start: "20:00", end: "01:00", hours: 5, note: "x" });
+  assert.deepEqual([a.date, a.start, a.end, a.note], ["2026-11-15", "20:00", "00:00", "x"]); assert.ok(near(a.hours, 4));
+  assert.deepEqual([b.date, b.start, b.end], ["2026-11-16", "00:00", "01:00"]); assert.ok(near(b.hours, 1));
+  // hours that differ from the clock range are shared in proportion
+  const p = M.splitAtMidnight({ date: "2026-11-16", start: "23:00", end: "01:00", hours: 1 });
+  assert.ok(near(p[0].hours, 0.5) && near(p[1].hours, 0.5));
+  // ending exactly at midnight → all on the day before
+  const z = M.splitAtMidnight({ date: "2026-11-16", start: "22:00", end: "00:00", hours: 2 });
+  assert.equal(z.length, 1); assert.equal(z[0].date, "2026-11-15"); assert.equal(z[0].hours, 2);
+  // start + hours past midnight, end + hours before midnight
+  const s = M.splitAtMidnight({ date: "2026-11-16", start: "22:00", hours: 3 });
+  assert.deepEqual(s.map(x => [x.date, x.start, x.end]), [["2026-11-15", "22:00", "00:00"], ["2026-11-16", "00:00", "01:00"]]);
+  const e = M.splitAtMidnight({ date: "2026-11-16", end: "00:30", hours: 1 });
+  assert.ok(near(e[0].hours, 0.5) && e[0].date === "2026-11-15");
+  // unchanged: no times, or within one day
+  const plain = { date: "2026-11-16", hours: 2 }, day = { date: "2026-11-16", start: "09:00", end: "11:00", hours: 2 };
+  assert.deepEqual(M.splitAtMidnight(plain), [plain]); assert.deepEqual(M.splitAtMidnight(day), [day]);
+  // the task total doesn't change; the per-day views see the split
+  const t = { logs: [{ date: "2026-11-16", start: "20:00", end: "01:00", hours: 5, note: "" }] };
+  const dl = M.dayLogs(t);
+  assert.equal(dl.length, 2); assert.ok(near(dl.reduce((x, l) => x + l.hours, 0), 5));
 });
