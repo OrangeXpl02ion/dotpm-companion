@@ -599,7 +599,11 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     if (!(f instanceof TFile) || !t) return;
     const logs = this.rawLogs(f), idx = M.logsToStamp(p.before, logs, p.day), fix = M.logsToRestamp(p.before, logs);
     if (!idx.length && !fix.length) return;
-    for (const i of idx) Object.assign(logs[i], M.stampTimes(logs[i].hours, p.at));
+    for (const i of idx) {
+      Object.assign(logs[i], M.stampTimes(logs[i].hours, p.at));
+      // a range that wrapped past midnight started yesterday: logs are dated the day the work started
+      if (logs[i].start > logs[i].end && logs[i].date === p.day) logs[i].date = M.addDays(p.day, -1);
+    }
     // hours changed on a log whose times matched the old hours: keep its end, move its start
     for (const i of fix) { const [hh, mm] = logs[i].end.split(":").map(Number); Object.assign(logs[i], M.stampTimes(logs[i].hours, hh * 60 + mm)); }
     await this.updateTask(path, { timeLogs: logs });
@@ -1054,8 +1058,8 @@ class FileSuggestModal extends FuzzySuggestModal {
   onChooseItem(f) { this.onPick(f); }
 }
 // Log time: separate Start / End / Hours / Note fields. The date isn't a field — it's today; work that crosses
-// midnight is dated the following day, the day it ended (shown, not editable), and counts on both days: the hours
-// before midnight on the day before, the rest on its date (the hint shows the split). Any two of start, end and hours are enough; one alone ends now.
+// midnight is dated the day it started (yesterday when logged after midnight; shown, not editable) and counts on both
+// days: the hours before midnight on its date, the rest on the next day (the hint shows the split). Any two of start, end and hours are enough; one alone ends now.
 class LogTimeModal extends Modal {
   constructor(plugin, task) { super(plugin.app); this.plugin = plugin; this.task = task; }
   onOpen() {

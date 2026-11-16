@@ -74,7 +74,7 @@ task in memory otherwise leaves dotpm showing stale values until it reloads.
 - Colors: categorical slots follow the work-type option order (validated palette, 9th = neutral gray).
 - Logs are written by one device (`settings.logDeviceId` vs a per-device id in local storage).
 - Undo state (`settings.undo`, `settings.pulled`) only lives for the day it was made.
-- A time log crossing midnight is stored once, dated the day it ended. Anything that counts time per day reads
+- A time log is dated the day its work started; one crossing midnight is stored once. Anything that counts time per day reads
   `M.dayLogs(t)` (logs split at midnight by `splitAtMidnight`), not `t.logs`; `t.logs` stays one entry per stored log
   (index-matched against the file by `logsToStamp`/`logsToRestamp`).
 - Logs from dotpm's time panel get `start`/`end` only on the device with input in the last 2 min (`watchLogs`), never on one that received the file through sync.

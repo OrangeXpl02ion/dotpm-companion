@@ -855,8 +855,8 @@ function parseQuickAdd(text, ctx) {
 //   "2-3:30pm sanding"  "14:00-15:30"  "9am–noon" → that range; hours from the range
 //   "1.5 at 2pm"  "2h from 14:00"                 → starts then, ends that much later
 // `nowMin` = minutes after midnight (defaults to the whole-day case with no times).
-// Returns { hours, note, start, end, dayOffset } — start/end "HH:MM". Work that crosses midnight is dated the day it ended
-// (today), so dayOffset is always 0 here.
+// Returns { hours, note, start, end, dayOffset } — start/end "HH:MM". Work is dated the day it started: a range that
+// crosses midnight (logged after midnight) is yesterday's (dayOffset −1), and its hours after midnight count on today.
 const CLOCK = String.raw`(noon|midnight|\d{1,2}(?::\d{2})?\s*(?:am|pm|a|p)?)`;
 function clockMin(txt, pmHint) {
   const s = String(txt).trim().toLowerCase();
@@ -913,15 +913,18 @@ function parseLogInput(text, nowMin) {
   if (startMin == null && typeof nowMin === "number") { endMin = nowMin; startMin = nowMin - hours * 60; }
   if (startMin != null) {
     if (endMin == null) endMin = startMin + hours * 60;
-    out.dayOffset = 0; // crossing midnight → dated the following day (today)
+    const S = ((startMin % 1440) + 1440) % 1440, E = ((endMin % 1440) + 1440) % 1440;
+    // a range crossing midnight that starts later in the day than now ran last night (yesterday's),
+    // e.g. "2h" at 00:30 = 22:30–00:30 or "11pm-1am" the next afternoon
+    out.dayOffset = typeof nowMin === "number" && E <= S && S > nowMin ? -1 : 0;
     out.start = fmtClock(startMin); out.end = fmtClock(endMin);
   }
   return out;
 }
 // Log time from separate fields (the Log time box): start and end clock times, hours, note. The date isn't a field —
-// it's today. Work that crosses midnight is dated the following day (the day it ended); only a range that ended
-// before now without crossing midnight while starting later in the day than now (23:00–23:40 logged at 00:30) is
-// dated yesterday.
+// it's the day the work started: today, or yesterday when the start is later in the day than now (a range logged
+// after midnight that started last night: 20:58–01:00 or 23:00–23:40 logged at 01:10). The hours after midnight
+// of a range that crosses it count on the following day (splitAtMidnight).
 //   start + end      → that range (end before start = past midnight)
 //   start + hours    → ends `hours` later          end + hours → began `hours` earlier
 //   start only       → ends now                    hours only  → ends now
@@ -958,16 +961,14 @@ function logFromFields(f, nowMin) {
   else return { error: "Give a start and end time, or hours." };
   if (!(hours > 0) || hours > 24) return { error: "That's more than 24 hours." };
   hours = Math.round(hours * 100) / 100;
-  // which day? The day the work ended. A range crossing midnight ended today (the following day); a range that
-  // doesn't cross midnight but starts later than now must have been last night, so it's yesterday's.
-  const S = ((s % 1440) + 1440) % 1440, E = ((e % 1440) + 1440) % 1440, wraps = s < 0 || S > E || e >= 1440;
-  let dayOffset = 0;
-  if (!wraps && now != null && S > now) dayOffset = -1;
+  // which day? The day the work started: a start later in the day than now must have been last night.
+  const S = ((s % 1440) + 1440) % 1440, E = ((e % 1440) + 1440) % 1440;
+  const dayOffset = now != null && S > now ? -1 : 0;
   return { hours, note: String(f.note || "").trim(), start: fmtClock(S), end: fmtClock(E), dayOffset };
 }
 function describeLog(v) {
   if (!v) return "";
-  const when = v.start ? `${v.dayOffset ? "yesterday" : "today"} ${v.start}–${v.end}${v.start > v.end ? " (from last night)" : ""}` : "today";
+  const when = v.start ? `${v.dayOffset ? "yesterday" : "today"} ${v.start}–${v.end}${v.start > v.end ? " (past midnight)" : ""}` : "today";
   return `${v.hours}h, ${when}${v.note ? ` — “${v.note}”` : ""}`;
 }
 
@@ -1246,24 +1247,24 @@ function setFrontmatterLines(text, fields) {
 }
 
 // ---------- time spent ----------
-// A log whose clock range crosses midnight is stored once, dated the day it ended (20:00–01:00 logged after
-// midnight is dated the next day). For counting time per day it's split at midnight: the part before midnight
-// goes to the day before (20:00–00:00), the rest stays on its date (00:00–01:00). Hours are shared in proportion
-// to the clock time on each side, so the total doesn't change. A log ending exactly at 00:00 moves wholly to the
-// day before. Logs without clock times, or that don't cross midnight, come back unchanged.
+// A log is dated the day the work started. When its clock range crosses midnight (20:58–01:00), it's split for
+// counting time per day: the part before midnight stays on its date (20:58–00:00), the rest goes to the next day
+// (00:00–01:00). Hours are shared in proportion to the clock time on each side, so the total doesn't change. A
+// range ending exactly at 00:00 stays wholly on its date. Logs without clock times, or within one day, come back
+// unchanged. The file keeps one log either way.
 function splitAtMidnight(l) {
   if (!l || !l.date || !(l.hours > 0)) return [l];
   const s = l.start ? hm(l.start) : null, e = l.end ? hm(l.end) : null;
-  let a, b; // the range in hours relative to the log's date (a < 0 = started the day before)
-  if (s != null && e != null) { b = e; a = e <= s ? s - 24 : s; }
-  else if (s != null) { b = s + l.hours; a = s; if (b > 24) { a -= 24; b -= 24; } }
-  else if (e != null) { b = e; a = e - l.hours; }
+  let a, b; // the range in hours from the start of the log's date (b > 24 = ran into the next day)
+  if (s != null && e != null) { a = s; b = e <= s ? e + 24 : e; }
+  else if (s != null) { a = s; b = s + l.hours; }
+  else if (e != null) { b = e; a = e - l.hours; if (a < 0) { a += 24; b += 24; } }
   else return [l];
-  if (!(a < 0)) return [l];
-  const len = b - a, h1 = len > 0 ? l.hours * (-a / len) : l.hours, h2 = l.hours - h1;
-  const before = { ...l, date: addDays(l.date, -1), hours: h1, start: fmtClock((a + 24) * 60), end: "00:00", split: true };
-  const after = { ...l, hours: h2, start: "00:00", end: fmtClock(b * 60), split: true };
-  return h2 > 1e-9 ? [before, after] : [{ ...before, hours: l.hours }];
+  if (!(b > 24 + 1e-9)) return [l];
+  const h1 = l.hours * ((24 - a) / (b - a)), h2 = l.hours - h1;
+  const before = { ...l, hours: h1, start: fmtClock(a * 60), end: "00:00", split: true };
+  const after = { ...l, date: addDays(l.date, 1), hours: h2, start: "00:00", end: fmtClock((b - 24) * 60), split: true };
+  return h1 > 1e-9 ? [before, after] : [{ ...after, hours: l.hours }];
 }
 // A task's logs as they count per day (see splitAtMidnight).
 function dayLogs(t) { return ((t && t.logs) || []).flatMap(splitAtMidnight); }
@@ -1274,15 +1275,15 @@ function dayLogs(t) { return ((t && t.logs) || []).flatMap(splitAtMidnight); }
 // without one only count in the totals ("untimed"). `budget` is estimate × multiplier, the same figure the planner uses.
 // opts: { capacity, capacityDays, defaultWeeklyHours, workWindow, today }
 // The log's clock span on its date, as [from, to, fullLength] in hours. Given an unsplit log that crosses midnight
-// (dated the day it ended) it returns the part after midnight, 00:00 → end, with fullLength the whole range;
+// (dated the day it started) it returns the part before midnight, start → 24:00, with fullLength the whole range;
 // timeReport splits such logs first, so there each piece covers only its own day.
 function logSpan(l) {
   const e = l.end ? hm(l.end) : null, s0 = l.start ? hm(l.start) : null;
   if (s0 == null && e == null) return null;
   let a = s0 != null ? s0 : e - l.hours, b = e != null ? e : s0 + l.hours;
-  if (b > 24) { const len = b - a; return [0, b - 24, len]; } // start + hours ran past midnight
-  if (a < 0) return [0, b, b - a];
-  if (b <= a) { const len = 24 - a + b; return b > 0 ? [0, b, len] : [a, 24, len]; } // crossed midnight
+  if (b > 24) return [a, 24, b - a]; // start + hours ran past midnight
+  if (a < 0) return [a + 24, 24, b - a]; // end + hours: started the evening before
+  if (b <= a) return [a, 24, 24 - a + b]; // crossed midnight
   return [a, b, b - a];
 }
 function timeReport(tasks, cfg, mults, from, to, opts) {
@@ -1453,7 +1454,7 @@ function logsToRestamp(before, after) {
 // Start and end for a log noticed at `nowMin` (minutes after midnight): it ends then and started `hours` earlier,
 // never before midnight.
 function stampTimes(hours, nowMin) {
-  // dotpm dates the log today, the day it ended; a start before midnight wraps (00:30 for 2h → 22:30–00:30)
+  // a start before midnight wraps (00:30 for 2h → 22:30–00:30); the caller dates such a log yesterday
   const end = Math.round(nowMin), start = end - Math.round(hours * 60);
   return { start: fmtClock(start), end: fmtClock(end) };
 }
@@ -2588,9 +2589,10 @@ __mods["./dotpmtime"] = function(module, exports, require){
 // (`editor.task.timeLogs[i]`), and writes the draft when you press Save. We add two time inputs after the date and
 // write `start` / `end` onto that same object, so dotpm saves them with the rest (it copies log objects whole).
 // Both times set → hours follow. Hours changed with a start set → end follows.
-// Work that crosses midnight is logged on the following day (the day it ended): when a range starts crossing
-// midnight on a row dated before today, its date moves one day later (never past today); if it stops crossing,
-// the date moves back. A row dated today (dotpm's default for a new log) keeps its date.
+// A log is dated the day the work started. On a row dated today (dotpm's default for a new log), a start later in
+// the day than now means the work began last night (20:58–01:00 typed at 01:10), so the date moves back one day; if
+// the start is changed to before now again, it moves forward. Rows dated any other day keep their date. The hours
+// after midnight of a range that crosses it count on the next day (M.splitAtMidnight).
 // No Obsidian imports, so it can run against a fake page in tests.
 const M = require("./model");
 
@@ -2600,13 +2602,14 @@ function toMin(v) { const c = M.normClock(v); if (!c) return null; const [h, m] 
 const round2 = x => Math.round(x * 100) / 100;
 
 const crosses = log => { const s = toMin(log.start), e = toMin(log.end); return s != null && e != null && e <= s; };
-// Move the date when a range starts or stops crossing midnight. `bumped` = we moved it forward earlier.
-// Returns the new bumped state.
-function shiftForMidnight(log, wasCrossing, bumped, today) {
-  const now = crosses(log), d = M.normDate(log.date);
+// Date the row by the day its work started. `bumped` = we moved it back a day earlier; `nowMin` = minutes after
+// midnight. Returns the new bumped state.
+function shiftForStartDay(log, bumped, today, nowMin) {
+  const d = M.normDate(log.date), s = toMin(log.start);
   if (!d) return bumped;
-  if (now && !wasCrossing && !bumped && M.addDays(d, 1) <= today) { log.date = M.addDays(d, 1); return true; }
-  if (!now && wasCrossing && bumped) { log.date = M.addDays(d, -1); return false; }
+  const lastNight = s != null && s > nowMin;
+  if (!bumped && lastNight && d === today) { log.date = M.addDays(d, -1); return true; }
+  if (bumped && !lastNight) { log.date = M.addDays(d, 1); return false; }
   return bumped;
 }
 // Apply a change to one log. `which` is "start", "end" or "hours"; returns what the row should now show.
@@ -2653,9 +2656,10 @@ function enhanceRow(row, log) {
   const show = v => { start.value = v.start; end.value = v.end; hours.value = String(v.hours); };
   let bumped = false;
   const onTime = which => () => {
-    const was = crosses(log), oldDate = log.date;
+    const oldDate = log.date;
     const v = applyTimes(log, which, which === "start" ? start.value : end.value);
-    bumped = shiftForMidnight(log, was, bumped, M.localToday());
+    const t = new Date();
+    bumped = shiftForStartDay(log, bumped, M.localToday(), t.getHours() * 60 + t.getMinutes());
     show(v);
     hours.dispatchEvent(new Event("change", { bubbles: true })); // dotpm reads the hours box back into the log
     if (date && log.date !== oldDate) { date.value = log.date; date.dispatchEvent(new Event("change", { bubbles: true })); }
@@ -2696,7 +2700,7 @@ function watch(doc, findLogs) {
   return { scan, stop: () => obs.disconnect() };
 }
 
-module.exports = { applyTimes, shiftForMidnight, crosses, enhanceRow, enhanceList, watch };
+module.exports = { applyTimes, shiftForStartDay, crosses, enhanceRow, enhanceList, watch };
 
 };
 __mods["./main"] = function(module, exports, require){
@@ -3300,7 +3304,11 @@ const DotpmCompanion = module.exports = class DotpmCompanion extends Plugin {
     if (!(f instanceof TFile) || !t) return;
     const logs = this.rawLogs(f), idx = M.logsToStamp(p.before, logs, p.day), fix = M.logsToRestamp(p.before, logs);
     if (!idx.length && !fix.length) return;
-    for (const i of idx) Object.assign(logs[i], M.stampTimes(logs[i].hours, p.at));
+    for (const i of idx) {
+      Object.assign(logs[i], M.stampTimes(logs[i].hours, p.at));
+      // a range that wrapped past midnight started yesterday: logs are dated the day the work started
+      if (logs[i].start > logs[i].end && logs[i].date === p.day) logs[i].date = M.addDays(p.day, -1);
+    }
     // hours changed on a log whose times matched the old hours: keep its end, move its start
     for (const i of fix) { const [hh, mm] = logs[i].end.split(":").map(Number); Object.assign(logs[i], M.stampTimes(logs[i].hours, hh * 60 + mm)); }
     await this.updateTask(path, { timeLogs: logs });
@@ -3755,8 +3763,8 @@ class FileSuggestModal extends FuzzySuggestModal {
   onChooseItem(f) { this.onPick(f); }
 }
 // Log time: separate Start / End / Hours / Note fields. The date isn't a field — it's today; work that crosses
-// midnight is dated the following day, the day it ended (shown, not editable), and counts on both days: the hours
-// before midnight on the day before, the rest on its date (the hint shows the split). Any two of start, end and hours are enough; one alone ends now.
+// midnight is dated the day it started (yesterday when logged after midnight; shown, not editable) and counts on both
+// days: the hours before midnight on its date, the rest on the next day (the hint shows the split). Any two of start, end and hours are enough; one alone ends now.
 class LogTimeModal extends Modal {
   constructor(plugin, task) { super(plugin.app); this.plugin = plugin; this.task = task; }
   onOpen() {
